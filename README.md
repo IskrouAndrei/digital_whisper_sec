@@ -4,7 +4,7 @@
 
 **CyberSentry: The Digital Whisper** is your personal, high-performance AI agent designed to dominate the cybersecurity information field. It monitors global threat feeds, translates and refines technical details using LLMs, and acts as an omni-channel publisher—all controlled via a sleek Telegram-based "Human-in-the-loop" moderation system.
 
-The main objective is **Speed-to-Feed**: delivering critical infosec threat alerts to your professional audience (SOC analysts, blue/red teams, DevOps engineers) 2-3 hours faster than traditional news sites.
+The main objective is **Speed-to-Feed**: delivering critical infosec threat alerts to your professional audience (SOC analysts, blue/red teams, DevOps engineers) 2-3 hours faster than mainstream media.
 
 ---
 
