@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  digital_whisper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: digital_whisper
+    restart: unless-stopped
+
+    # Файл переменных окружения (скопируй .env.example → .env и заполни)
+    env_file:
+      - .env
+
+    # Persistent volumes: БД и логи не теряются при пересборке контейнера
+    volumes:
+      - db_data:/data        # SQLite база данных
+      - log_data:/logs       # Файлы логов с ротацией
+
+    # Healthcheck: проверяем, что процесс жив (опционально)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3; sqlite3.connect('/data/digital_whisper.db').execute('SELECT 1')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+    # Ограничения ресурсов
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  db_data:
+    driver: local
+  log_data:
+    driver: local

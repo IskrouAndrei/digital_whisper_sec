@@ -1,0 +1,27 @@
+# === Секреты ===
+.env
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# === База данных (локальная) ===
+*.db
+*.db-shm
+*.db-wal
+
+# === Логи ===
+logs/*.log
+logs/*.log.zip
+
+# === Docker ===
+.docker/
+
+# === IDE ===
+.idea/
+.vscode/
+*.swp
