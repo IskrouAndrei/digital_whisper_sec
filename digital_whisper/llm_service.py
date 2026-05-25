@@ -177,8 +177,9 @@ async def generate_post(
     )
 
     # Обрезка по лимитам на случай если модель всё же превысила
-    if ai_text and len(ai_text) > 950:
-        ai_text = ai_text[:947] + "..."
+    # Не режем жестко ai_text на 950 символов, чтобы не ломать HTML-теги. Позволяем умеренные превышения.
+    if ai_text and len(ai_text) > 4000:
+        ai_text = ai_text[:3997] + "..."
     if ai_short and len(ai_short) > 250:
         ai_short = ai_short[:247] + "..."
 
