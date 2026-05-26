@@ -102,9 +102,35 @@ def _moderation_keyboard(
 
 def _format_draft(row) -> str:
     """Форматирует черновик для отправки администратору."""
+    row = dict(row)
+    pub_time = row.get("published_at") or row.get("created_at") or "—"
+    
+    # Пытаемся сделать дату более читаемой в формате МСК (+3 часа от UTC)
+    from datetime import datetime, timezone, timedelta
+    formatted_time = pub_time
+    try:
+        if " " in pub_time and ":" in pub_time:
+            # Парсим 'YYYY-MM-DD HH:MM:SS' (UTC из sqlite3 created_at)
+            dt_utc = datetime.strptime(pub_time.split(".")[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            dt_msc = dt_utc + timedelta(hours=3)
+            formatted_time = dt_msc.strftime("%d.%m.%Y %H:%M") + " (МСК)"
+        elif "T" in pub_time and ":" in pub_time:
+            # ISO формат (например, '2026-05-26T12:00:00Z')
+            cleaned = pub_time.split("+")[0].split("Z")[0].split(".")[0]
+            dt = datetime.strptime(cleaned, "%Y-%m-%dT%H:%M:%S")
+            if "+03:00" in pub_time or "GMT+3" in pub_time:
+                formatted_time = dt.strftime("%d.%m.%Y %H:%M") + " (МСК)"
+            else:
+                dt_utc = dt.replace(tzinfo=timezone.utc)
+                dt_msc = dt_utc + timedelta(hours=3)
+                formatted_time = dt_msc.strftime("%d.%m.%Y %H:%M") + " (МСК)"
+    except Exception:
+        pass
+
     return (
         f"🔵 <b>НОВАЯ НОВОСТЬ #{row['id']}</b>\n"
         f"📰 <b>Источник:</b> {row['source'] or '—'}\n"
+        f"📅 <b>Опубликовано:</b> {formatted_time}\n"
         f"🔗 <a href='{row['url']}'>Оригинал</a>\n\n"
         f"<b>📋 Черновик для публикации:</b>\n"
         f"{row['ai_text'] or '⚠️ ai_text не готов'}\n\n"

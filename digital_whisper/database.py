@@ -62,6 +62,7 @@ class Database:
                     source      TEXT,
                     status      TEXT    NOT NULL DEFAULT 'pending',
                     is_viral    INTEGER NOT NULL DEFAULT 0,
+                    published_at TEXT,
                     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
                 );
 
@@ -74,6 +75,14 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_news_created_at ON news(created_at);
                 CREATE INDEX IF NOT EXISTS idx_news_is_viral   ON news(is_viral);
             """)
+            
+            # Миграция: добавляем колонку published_at, если база данных была создана ранее
+            try:
+                conn.execute("ALTER TABLE news ADD COLUMN published_at TEXT;")
+                log.info("💾 Схема БД обновлена: добавлена колонка published_at")
+            except sqlite3.OperationalError:
+                pass  # Колонка уже существует
+
             # По умолчанию автоматический парсинг включен
             conn.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_parser_enabled', '1')"
@@ -98,6 +107,7 @@ class Database:
         raw_text: str,
         url: str,
         source: str,
+        published_at: Optional[str] = None,
     ) -> Optional[int]:
         """
         Вставляет новую запись со статусом 'pending'.
@@ -107,10 +117,10 @@ class Database:
             with self._connect() as conn:
                 cursor = conn.execute(
                     """
-                    INSERT INTO news (title, raw_text, url, source)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO news (title, raw_text, url, source, published_at)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
-                    (title, raw_text, url, source),
+                    (title, raw_text, url, source, published_at),
                 )
                 news_id = cursor.lastrowid
                 log.debug("📥 Новость сохранена [id={}]: {}", news_id, title[:80])

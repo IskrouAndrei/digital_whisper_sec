@@ -33,6 +33,9 @@ RSS_SOURCES: dict[str, str] = {
     "Unit 42":               "https://unit42.paloaltonetworks.com/feed/",
     "Dark Reading":          "https://www.darkreading.com/rss.xml",
     "Krebs on Security":     "https://krebsonsecurity.com/feed/",
+    "Habr Infosec":          "https://habr.com/ru/rss/hub/infosecurity/",
+    "Xakep":                 "https://xakep.ru/feed/",
+    "SecurityLab":           "https://www.securitylab.ru/_services/export/rss/",
 }
 
 
@@ -101,12 +104,14 @@ async def parse_and_store(db: Database) -> list[int]:
 
             title = entry.get("title", "Без заголовка").strip()
             summary = _clean_html(entry.get("summary", entry.get("description", "")))
+            published_at = entry.get("published", entry.get("pubDate", entry.get("created", ""))).strip()
 
             news_id = db.insert_news(
                 title=title,
                 raw_text=summary,
                 url=entry_url,
                 source=source_name,
+                published_at=published_at,
             )
 
             if news_id is not None:

@@ -114,7 +114,10 @@ def load_config() -> Config:
         "https://securelist.com/feed/,"
         "https://unit42.paloaltonetworks.com/feed/,"
         "https://www.darkreading.com/rss.xml,"
-        "https://krebsonsecurity.com/feed/"
+        "https://krebsonsecurity.com/feed/,"
+        "https://habr.com/ru/rss/hub/infosecurity/,"
+        "https://xakep.ru/feed/,"
+        "https://www.securitylab.ru/_services/export/rss/"
     ))
     feeds = [f.strip() for f in raw_feeds.split(",") if f.strip()]
 
