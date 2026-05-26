@@ -173,6 +173,67 @@ async def weekly_digest_job(db: Database, bot: Bot) -> None:
         await send_alert(f"[CRITICAL] Ошибка еженедельного дайджеста:\n{exc}", exc)
 
 
+async def token_expiry_check_job(db: Database, bot) -> None:
+    """
+    Ежедневная проверка срока жизни токенов OAuth (LinkedIn и др.).
+    LinkedIn токены живут 60 дней. Отправляет напоминание за 2 дня до истечения.
+    """
+    from datetime import datetime, timezone, timedelta
+    from aiogram.enums import ParseMode
+
+    # Токен LinkedIn настроен?
+    access_token = (cfg.linkedin_access_token or "").split("#")[0].strip()
+    if not access_token or access_token.startswith("your_"):
+        return  # LinkedIn не настроен — проверять нечего
+
+    today = datetime.now(timezone.utc).date()
+
+    # При первом запуске — сохраняем дату выдачи токена
+    issue_date_str = db.get_setting("linkedin_token_issued_at", "")
+    if not issue_date_str:
+        db.set_setting("linkedin_token_issued_at", today.isoformat())
+        log.info("📅 LinkedIn токен: дата выдачи зафиксирована — {}", today.isoformat())
+        return
+
+    try:
+        issue_date = datetime.fromisoformat(issue_date_str).date()
+    except ValueError:
+        log.warning("⚠️ Не удалось разобрать дату токена LinkedIn: {}", issue_date_str)
+        return
+
+    linkedin_token_lifetime_days = 60
+    expiry_date = issue_date + timedelta(days=linkedin_token_lifetime_days)
+    days_left = (expiry_date - today).days
+
+    log.info("🔑 LinkedIn токен: выдан {}, истекает {}, осталось {} дн.",
+             issue_date_str, expiry_date.isoformat(), days_left)
+
+    # Напоминание за 2 дня и за 1 день
+    if days_left <= 2:
+        urgency = "🆘 СРОЧНО" if days_left <= 1 else "⚠️ ВНИМАНИЕ"
+        try:
+            await bot.send_message(
+                chat_id=cfg.admin_chat_id,
+                text=(
+                    f"{urgency} <b>LinkedIn токен истекает через {days_left} дн.!</b>\n\n"
+                    f"📅 Дата выдачи: <code>{issue_date_str}</code>\n"
+                    f"📅 Дата истечения: <code>{expiry_date.isoformat()}</code>\n\n"
+                    "<b>Что сделать:</b>\n"
+                    "1. Зайди на <a href='https://www.linkedin.com/developers/apps'>LinkedIn Developers</a>\n"
+                    "2. Обнови Access Token в разделе OAuth\n"
+                    "3. Замени <code>LINKEDIN_ACCESS_TOKEN</code> в <code>.env</code> на сервере:\n"
+                    "<code>nano /root/digital_whisper_sec/digital_whisper/.env</code>\n"
+                    "4. После обновления токена выполни:\n"
+                    "<code>docker compose restart digital_whisper</code>\n\n"
+                    "После рестарта таймер сбросится автоматически."
+                ),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            log.warning("⚠️ Отправлено напоминание об истечении LinkedIn токена ({} дн. осталось)", days_left)
+        except Exception as exc:
+            log.error("❌ Не удалось отправить напоминание о токене: {}", exc)
+
 # ---------------------------------------------------------------------------
 # Точка входа
 # ---------------------------------------------------------------------------
@@ -224,6 +285,18 @@ async def main() -> None:
         args=[db, bot],
         id="weekly_digest",
         name="Weekly Habr Digest",
+        replace_existing=True,
+    )
+
+    # Ежедневная проверка срока действия OAuth-токенов (LinkedIn и др.)
+    scheduler.add_job(
+        token_expiry_check_job,
+        trigger="cron",
+        hour=10,      # 10:00 UTC = 13:00 MSK
+        minute=0,
+        args=[db, bot],
+        id="token_expiry_check",
+        name="Token Expiry Check",
         replace_existing=True,
     )
 

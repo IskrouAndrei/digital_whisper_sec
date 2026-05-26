@@ -83,16 +83,18 @@ def get_dispatcher(db: Database) -> Dispatcher:
 # Вспомогательные функции
 # ---------------------------------------------------------------------------
 
-def _moderation_keyboard(news_id: int, is_viral: bool = False) -> InlineKeyboardMarkup:
+def _moderation_keyboard(news_id: int, is_viral: bool = False, linkedin_done: bool = False) -> InlineKeyboardMarkup:
     """Генерирует Inline-клавиатуру для черновика новости."""
     viral_label = "🔥 Пикабу (отмечено)" if is_viral else "🔥 На Пикабу"
+    linkedin_label = "🔗 LinkedIn ✅" if linkedin_done else "🔗 LinkedIn"
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Опубликовать",  callback_data=f"approve_{news_id}"),
-            InlineKeyboardButton(text="❌ Отклонить",     callback_data=f"reject_{news_id}"),
+            InlineKeyboardButton(text="✅ Опубликовать везде", callback_data=f"approve_{news_id}"),
+            InlineKeyboardButton(text="❌ Отклонить",          callback_data=f"reject_{news_id}"),
         ],
         [
-            InlineKeyboardButton(text=viral_label,        callback_data=f"viral_{news_id}"),
+            InlineKeyboardButton(text=linkedin_label,          callback_data=f"linkedin_{news_id}"),
+            InlineKeyboardButton(text=viral_label,             callback_data=f"viral_{news_id}"),
         ],
     ])
 
@@ -317,6 +319,40 @@ async def handle_viral(callback: CallbackQuery, db: Database) -> None:
     await callback.answer(f"Новость #{news_id} {status}")
 
 
+@_router.callback_query(F.data.startswith("linkedin_"))
+async def handle_linkedin_only(callback: CallbackQuery, db: Database) -> None:
+    """Публикует новость ТОЛЬКО в LinkedIn (без смены общего статуса)."""
+    news_id = int(callback.data.split("_")[1])
+    row = db.get_by_id(news_id)
+
+    if not row:
+        await callback.answer("❌ Новость не найдена в БД", show_alert=True)
+        return
+
+    await callback.answer("🔗 Публикую в LinkedIn...")
+    log.info("👤 Ручная публикация #{} в LinkedIn", news_id)
+
+    ok = await publish_to_linkedin(row)
+
+    if ok:
+        # Обновляем клавиатуру — отмечаем LinkedIn как опубликованный
+        updated_row = db.get_by_id(news_id)
+        new_keyboard = _moderation_keyboard(
+            news_id,
+            is_viral=bool(updated_row["is_viral"]),
+            linkedin_done=True,
+        )
+        try:
+            await callback.message.edit_reply_markup(reply_markup=new_keyboard)
+        except TelegramAPIError:
+            pass
+        await callback.answer("✅ Опубликовано в LinkedIn!", show_alert=True)
+    else:
+        await callback.answer(
+            "❌ Ошибка публикации в LinkedIn. Проверь логи.",
+            show_alert=True,
+        )
+
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Хендлеры управления и команд администратора
@@ -400,7 +436,12 @@ async def cmd_start(message: Message) -> None:
         "• /parse — Запустить ручной поиск киберугроз прямо сейчас\n"
         "• /stop_auto — Отключить автоматический поиск раз в час\n"
         "• /start_auto — Включить автоматический поиск раз в час\n"
-        "• /status — Показать текущий статус и статистику системы",
+        "• /status — Показать текущий статус и статистику системы\n\n"
+        "<b>Кнопки на каждом черновике:</b>\n"
+        "• ✅ Опубликовать везде — во все платформы сразу\n"
+        "• 🔗 LinkedIn — только в LinkedIn\n"
+        "• 🔥 На Пикабу — пометить как вирусный\n"
+        "• ❌ Отклонить — убрать из очереди",
         parse_mode=ParseMode.HTML,
     )
 
