@@ -17,6 +17,7 @@ bot_handlers.py — Telegram-бот модерации (aiogram v3).
     Вызывается из global exception handler в main.py.
 """
 
+import asyncio
 import traceback
 from typing import Optional
 
