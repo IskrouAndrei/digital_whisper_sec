@@ -122,7 +122,7 @@ async def publish_to_linkedin(row: Any) -> bool:
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
         "X-Restli-Protocol-Version": "2.0.0",
-        "LinkedIn-Version": "202501",   # Актуальная версия API
+        "LinkedIn-Version": "202605",   # Актуальная версия API
     }
 
     try:
