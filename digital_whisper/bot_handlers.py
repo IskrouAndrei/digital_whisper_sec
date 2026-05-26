@@ -3,14 +3,11 @@ bot_handlers.py — Telegram-бот модерации (aiogram v3).
 
 Архитектура:
   • При появлении новости с готовым ai_text бот шлёт черновик в ADMIN_CHAT_ID
-    с тремя Inline-кнопками:
-      ✅ Опубликовать   → callback approve_{news_id}
-      ❌ Отклонить      → callback reject_{news_id}
-      🔥 На Пикабу      → callback viral_{news_id}  (помечает is_viral=1, потом Approve)
-
-  • При нажатии ✅ — вызывает все паблишеры (Шаги 3-4), обновляет статус → published
-  • При нажатии ❌ — обновляет статус → rejected
-  • При нажатии 🔥 — устанавливает is_viral=1, затем ждёт ✅ или ❌
+    с четырьмя Inline-кнопками:
+      ✅ Опубликовать везде  → callback approve_{news_id}   (все платформы сразу)
+      ❌ Отклонить        → callback reject_{news_id}    (помечает rejected в БД)
+      📢 Telegram       → callback tgonly_{news_id}    (только Telegram-канал)
+      🔗 LinkedIn       → callback linkedin_{news_id}  (только LinkedIn)
 
 Алертинг:
   • Функция send_alert() отправляет критические ошибки в ADMIN_CHAT_ID.
@@ -83,9 +80,13 @@ def get_dispatcher(db: Database) -> Dispatcher:
 # Вспомогательные функции
 # ---------------------------------------------------------------------------
 
-def _moderation_keyboard(news_id: int, is_viral: bool = False, linkedin_done: bool = False) -> InlineKeyboardMarkup:
+def _moderation_keyboard(
+    news_id: int,
+    tg_done: bool = False,
+    linkedin_done: bool = False,
+) -> InlineKeyboardMarkup:
     """Генерирует Inline-клавиатуру для черновика новости."""
-    viral_label = "🔥 Пикабу (отмечено)" if is_viral else "🔥 На Пикабу"
+    tg_label = "📢 Telegram ✅" if tg_done else "📢 Telegram"
     linkedin_label = "🔗 LinkedIn ✅" if linkedin_done else "🔗 LinkedIn"
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -93,17 +94,16 @@ def _moderation_keyboard(news_id: int, is_viral: bool = False, linkedin_done: bo
             InlineKeyboardButton(text="❌ Отклонить",          callback_data=f"reject_{news_id}"),
         ],
         [
-            InlineKeyboardButton(text=linkedin_label,          callback_data=f"linkedin_{news_id}"),
-            InlineKeyboardButton(text=viral_label,             callback_data=f"viral_{news_id}"),
+            InlineKeyboardButton(text=tg_label,       callback_data=f"tgonly_{news_id}"),
+            InlineKeyboardButton(text=linkedin_label, callback_data=f"linkedin_{news_id}"),
         ],
     ])
 
 
 def _format_draft(row) -> str:
     """Форматирует черновик для отправки администратору."""
-    status_icon = "🔥" if row["is_viral"] else "🔵"
     return (
-        f"{status_icon} <b>НОВАЯ НОВОСТЬ #{row['id']}</b>\n"
+        f"🔵 <b>НОВАЯ НОВОСТЬ #{row['id']}</b>\n"
         f"📰 <b>Источник:</b> {row['source'] or '—'}\n"
         f"🔗 <a href='{row['url']}'>Оригинал</a>\n\n"
         f"<b>📋 Черновик для публикации:</b>\n"
@@ -247,8 +247,7 @@ async def handle_approve(callback: CallbackQuery, db: Database) -> None:
         await callback.message.edit_text(
             text=(
                 f"✅ <b>ОПУБЛИКОВАНО #{news_id}</b>\n\n"
-                f"📰 {row['source'] or '—'} | "
-                f"🔥 Пикабу: {'Да' if row['is_viral'] else 'Нет'}\n"
+                f"📰 {row['source'] or '—'}\n"
                 f"📡 Площадки: <b>{status_text}</b>\n"
                 f"🔗 <a href='{row['url']}'>Оригинал</a>"
             ),
@@ -290,34 +289,39 @@ async def handle_reject(callback: CallbackQuery, db: Database) -> None:
     await callback.answer("❌ Новость отклонена и помечена в БД")
 
 
-@_router.callback_query(F.data.startswith("viral_"))
-async def handle_viral(callback: CallbackQuery, db: Database) -> None:
-    """Администратор пометил новость как вирусную (для Пикабу)."""
+@_router.callback_query(F.data.startswith("tgonly_"))
+async def handle_telegram_only(callback: CallbackQuery, db: Database) -> None:
+    """Публикует новость ТОЛЬКО в Telegram-канал (без смены общего статуса)."""
     news_id = int(callback.data.split("_")[1])
     row = db.get_by_id(news_id)
 
     if not row:
-        await callback.answer("❌ Новость не найдена", show_alert=True)
+        await callback.answer("❌ Новость не найдена в БД", show_alert=True)
         return
 
-    # Тоглим флаг
-    new_viral = not bool(row["is_viral"])
-    db.set_viral(news_id, new_viral)
-    log.info("🔥 Вирусный флаг #{} → {}", news_id, new_viral)
+    await callback.answer("📢 Публикую в Telegram...")
+    log.info("👤 Ручная публикация #{} в Telegram-канал", news_id)
 
-    # Обновляем клавиатуру с новым состоянием кнопки
-    # Перечитываем из БД для актуального состояния
-    updated_row = db.get_by_id(news_id)
-    new_keyboard = _moderation_keyboard(news_id, is_viral=bool(updated_row["is_viral"]))
+    bot = get_bot()
+    ok = await publish_to_telegram(bot, row)
 
-    try:
-        await callback.message.edit_reply_markup(reply_markup=new_keyboard)
-    except TelegramAPIError:
-        pass
-
-    status = "отмечена 🔥" if new_viral else "флаг снят"
-    await callback.answer(f"Новость #{news_id} {status}")
-
+    if ok:
+        updated_row = db.get_by_id(news_id)
+        new_keyboard = _moderation_keyboard(
+            news_id,
+            tg_done=True,
+            linkedin_done=False,
+        )
+        try:
+            await callback.message.edit_reply_markup(reply_markup=new_keyboard)
+        except TelegramAPIError:
+            pass
+        await callback.answer("✅ Опубликовано в Telegram!", show_alert=True)
+    else:
+        await callback.answer(
+            "❌ Ошибка публикации в Telegram. Проверь логи.",
+            show_alert=True,
+        )
 
 @_router.callback_query(F.data.startswith("linkedin_"))
 async def handle_linkedin_only(callback: CallbackQuery, db: Database) -> None:
@@ -335,13 +339,7 @@ async def handle_linkedin_only(callback: CallbackQuery, db: Database) -> None:
     ok = await publish_to_linkedin(row)
 
     if ok:
-        # Обновляем клавиатуру — отмечаем LinkedIn как опубликованный
-        updated_row = db.get_by_id(news_id)
-        new_keyboard = _moderation_keyboard(
-            news_id,
-            is_viral=bool(updated_row["is_viral"]),
-            linkedin_done=True,
-        )
+        new_keyboard = _moderation_keyboard(news_id, tg_done=False, linkedin_done=True)
         try:
             await callback.message.edit_reply_markup(reply_markup=new_keyboard)
         except TelegramAPIError:
@@ -439,8 +437,8 @@ async def cmd_start(message: Message) -> None:
         "• /status — Показать текущий статус и статистику системы\n\n"
         "<b>Кнопки на каждом черновике:</b>\n"
         "• ✅ Опубликовать везде — во все платформы сразу\n"
+        "• 📢 Telegram — только в Telegram-канал\n"
         "• 🔗 LinkedIn — только в LinkedIn\n"
-        "• 🔥 На Пикабу — пометить как вирусный\n"
         "• ❌ Отклонить — убрать из очереди",
         parse_mode=ParseMode.HTML,
     )
