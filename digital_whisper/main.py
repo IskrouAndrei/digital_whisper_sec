@@ -131,8 +131,8 @@ async def parser_job(db: Database, manual: bool = False) -> None:
     """
     Задание APScheduler:
       1. Проверяет, включен ли автоматический парсинг (если не ручной запуск)
-      2. Парсит RSS-ленты
-      3. Запускает LLM-пайплайн для новых статей
+      2. Парсит RSS-ленты → добавляет новые статьи
+      3. Обрабатывает все pending-статьи из БД (включая ранее сброшенные)
     """
     if not manual:
         enabled = db.get_setting("auto_parser_enabled", "1")
@@ -145,9 +145,15 @@ async def parser_job(db: Database, manual: bool = False) -> None:
         new_ids = await parse_and_store(db)
 
         if new_ids:
-            await process_new_articles(db, new_ids)
+            log.info("📥 Найдено {} новых статей из RSS", len(new_ids))
+
+        # Обрабатываем ВСЕ pending-статьи (новые + ранее накопленные без ai_text)
+        all_pending_ids = db.get_pending_ids()
+        if all_pending_ids:
+            log.info("🔄 Запуск LLM-обработки {} pending-статей...", len(all_pending_ids))
+            await process_new_articles(db, all_pending_ids)
         else:
-            log.info("💤 [Scheduler] Новых статей нет, ждём следующего цикла")
+            log.info("💤 [Scheduler] Нет pending-статей для обработки")
 
     except Exception as exc:
         log.exception("💥 Критическая ошибка в parser_job: {}", exc)
