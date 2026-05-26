@@ -162,7 +162,7 @@ async def send_draft_to_admin(db: Database, news_id: int) -> bool:
 
     bot = get_bot()
     text = _format_draft(row)
-    keyboard = _moderation_keyboard(news_id, is_viral=bool(row["is_viral"]))
+    keyboard = _moderation_keyboard(news_id)
 
     try:
         await bot.send_message(
@@ -370,7 +370,12 @@ async def cmd_parse(message: Message, db: Database) -> None:
             async def run_parsing_bg():
                 try:
                     await _parse_callback(manual=True)
-                    await message.answer("✅ <b>Ручной поиск завершен!</b>\nЕсли были найдены интересные и критические уязвимости/взломы — черновики уже отправлены на модерацию.", parse_mode=ParseMode.HTML)
+                    pending_rows = db.get_pending_with_ai()
+                    count = len(pending_rows)
+                    extra_text = ""
+                    if count > 0:
+                        extra_text = f"\n\n⏳ В базе также обнаружено <b>{count} готовых черновиков</b>, ожидающих модерации. Отправьте команду /pending, чтобы прислать их в чат порциями."
+                    await message.answer(f"✅ <b>Ручной поиск завершен!</b>\nЕсли были найдены интересные и критические уязвимости/взломы — черновики уже отправлены на модерацию.{extra_text}", parse_mode=ParseMode.HTML)
                 except Exception as exc:
                     log.exception("❌ Ошибка при ручном поиске в фоне: {}", exc)
                     await message.answer(f"❌ <b>Ошибка при поиске:</b> <code>{exc}</code>", parse_mode=ParseMode.HTML)
@@ -381,6 +386,80 @@ async def cmd_parse(message: Message, db: Database) -> None:
             await message.answer(f"❌ <b>Ошибка при запуске:</b> <code>{exc}</code>", parse_mode=ParseMode.HTML)
     else:
         await message.answer("⚠️ Callback парсера не зарегистрирован. Бот еще запускается.", parse_mode=ParseMode.HTML)
+
+
+@_router.message(Command("pending"))
+async def cmd_pending(message: Message, db: Database) -> None:
+    """Показывает черновики, ожидающие модерации."""
+    if str(message.chat.id) != str(cfg.admin_chat_id) and str(message.from_user.id) != str(cfg.admin_chat_id):
+        return
+
+    pending_rows = db.get_pending_with_ai()
+    count = len(pending_rows)
+
+    if count == 0:
+        await message.answer("✅ <b>Нет черновиков, ожидающих модерации.</b>", parse_mode=ParseMode.HTML)
+        return
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📥 Получить 5 черновиков", callback_data="send_pending_5")]
+    ])
+
+    await message.answer(
+        f"⏳ <b>В базе данных обнаружено {count} черновиков</b>, готовых к публикации, но еще не прошедших модерацию.\n\n"
+        f"Нажмите кнопку ниже, чтобы прислать первые 5 черновиков в этот чат.",
+        reply_markup=keyboard,
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@_router.callback_query(F.data == "send_pending_5")
+async def handle_send_pending_5(callback: CallbackQuery, db: Database) -> None:
+    """Отправляет 5 черновиков администратору."""
+    pending_rows = db.get_pending_with_ai()
+    count = len(pending_rows)
+
+    if count == 0:
+        await callback.answer("✅ Все черновики обработаны!", show_alert=True)
+        try:
+            await callback.message.edit_text("✅ Все черновики обработаны!")
+        except TelegramAPIError:
+            pass
+        return
+
+    batch = pending_rows[:5]
+    sent_count = 0
+    for row in batch:
+        success = await send_draft_to_admin(db, row["id"])
+        if success:
+            sent_count += 1
+        await asyncio.sleep(0.5)
+
+    remaining = count - sent_count
+    await callback.answer(f"📥 Отправлено {sent_count} черновиков")
+
+    if remaining > 0:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📥 Получить еще 5", callback_data="send_pending_5")]
+        ])
+        try:
+            await callback.message.edit_text(
+                f"📥 <b>Отправлено {sent_count} черновиков.</b>\n"
+                f"⏳ Осталось в очереди: <b>{remaining}</b>.\n\n"
+                f"Нажмите кнопку ниже, чтобы получить следующую порцию.",
+                reply_markup=keyboard,
+                parse_mode=ParseMode.HTML,
+            )
+        except TelegramAPIError:
+            pass
+    else:
+        try:
+            await callback.message.edit_text(
+                f"✅ Все черновики из очереди отправлены на модерацию!",
+                parse_mode=ParseMode.HTML,
+            )
+        except TelegramAPIError:
+            pass
 
 
 @_router.message(Command("start_auto"))
@@ -432,6 +511,7 @@ async def cmd_start(message: Message) -> None:
         "Панель администратора активна.\n\n"
         "<b>Доступные команды:</b>\n"
         "• /parse — Запустить ручной поиск киберугроз прямо сейчас\n"
+        "• /pending — Показать черновики, ожидающие модерации\n"
         "• /stop_auto — Отключить автоматический поиск раз в час\n"
         "• /start_auto — Включить автоматический поиск раз в час\n"
         "• /status — Показать текущий статус и статистику системы\n\n"
