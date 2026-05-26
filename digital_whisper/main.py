@@ -222,8 +222,13 @@ async def main() -> None:
     )
 
     # Регистрируем callback для ручного парсинга в Telegram-боте
+    # Оборачиваем в замыкание, чтобы db передавалась автоматически
     from bot_handlers import register_parse_callback
-    register_parse_callback(parser_job)
+
+    async def _parser_job_with_db(manual: bool = False) -> None:
+        await parser_job(db, manual=manual)
+
+    register_parse_callback(_parser_job_with_db)
 
     scheduler.start()
     log.info("⏰ Планировщик запущен")
