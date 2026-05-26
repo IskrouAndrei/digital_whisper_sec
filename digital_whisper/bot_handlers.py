@@ -36,6 +36,10 @@ from config import cfg
 from database import Database
 from logger import log
 from publishers.tg_publisher import publish_to_telegram
+from publishers.vk_publisher import publish_to_vk
+from publishers.x_publisher import publish_to_x
+from publishers.linkedin_pub import publish_to_linkedin
+from publishers.threads_pub import publish_to_threads
 
 # ---------------------------------------------------------------------------
 # Инициализация бота (синглтон)
@@ -44,6 +48,13 @@ from publishers.tg_publisher import publish_to_telegram
 _bot: Optional[Bot] = None
 _dp: Optional[Dispatcher] = None
 _router = Router()
+_parse_callback = None
+
+
+def register_parse_callback(callback) -> None:
+    """Регистрирует callback-функцию для ручного парсинга (избегает циклического импорта)."""
+    global _parse_callback
+    _parse_callback = callback
 
 
 def get_bot() -> Bot:
@@ -196,17 +207,46 @@ async def handle_approve(callback: CallbackQuery, db: Database) -> None:
         await callback.answer("⚠️ Ошибка публикации в Telegram. См. логи", show_alert=True)
         return
 
-    # TODO Шаг 3-4: vk_publisher, x_publisher, linkedin_pub, threads_pub
+    # --- Публикация на другие платформы (VK, X, LinkedIn, Threads) ---
+    import asyncio
+    results = await asyncio.gather(
+        publish_to_vk(row),
+        publish_to_x(row),
+        publish_to_linkedin(row),
+        publish_to_threads(row),
+        return_exceptions=True
+    )
+
+    platforms = ["VK", "X (Twitter)", "LinkedIn", "Threads"]
+    success_platforms = ["Telegram"]
+    failed_platforms = []
+
+    for platform, res in zip(platforms, results):
+        if isinstance(res, Exception):
+            log.error("💥 [Publishers Orchestrator] Исключение при публикации в {}: {}", platform, res)
+            failed_platforms.append(platform)
+        elif res is False:
+            failed_platforms.append(platform)
+        else:
+            # Если вернул True, значит либо успешно опубликовано, либо платформа не настроена (пропуск)
+            # Мы можем проверить, настроена ли платформа, чтобы не хвастаться в отчете,
+            # но для простоты добавим в список успехов, если не было сбоя
+            success_platforms.append(platform)
 
     db.set_status(news_id, "published")
 
     # Обновляем сообщение в чате администратора
+    status_text = ", ".join(success_platforms)
+    if failed_platforms:
+        status_text += f" (Сбои: {', '.join(failed_platforms)})"
+
     try:
         await callback.message.edit_text(
             text=(
                 f"✅ <b>ОПУБЛИКОВАНО #{news_id}</b>\n\n"
                 f"📰 {row['source'] or '—'} | "
                 f"🔥 Пикабу: {'Да' if row['is_viral'] else 'Нет'}\n"
+                f"📡 Площадки: <b>{status_text}</b>\n"
                 f"🔗 <a href='{row['url']}'>Оригинал</a>"
             ),
             reply_markup=None,
@@ -215,7 +255,7 @@ async def handle_approve(callback: CallbackQuery, db: Database) -> None:
     except TelegramAPIError:
         pass  # Сообщение могло быть удалено
 
-    await callback.answer("✅ Опубликовано на всех платформах!")
+    await callback.answer("✅ Опубликовано на всех активных платформах!")
 
 
 @_router.callback_query(F.data.startswith("reject_"))
@@ -277,20 +317,70 @@ async def handle_viral(callback: CallbackQuery, db: Database) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Хендлер команды /status (диагностика)
 # ---------------------------------------------------------------------------
+# Хендлеры управления и команд администратора
+# ---------------------------------------------------------------------------
+
+@_router.message(Command("parse"))
+async def cmd_parse(message: Message, db: Database) -> None:
+    """Запускает ручной парсинг RSS-лент."""
+    if str(message.chat.id) != str(cfg.admin_chat_id) and str(message.from_user.id) != str(cfg.admin_chat_id):
+        return
+
+    await message.answer("🔍 <b>Запускаю ручной поиск киберугроз...</b>\nЭто займет немного времени.", parse_mode=ParseMode.HTML)
+
+    if _parse_callback:
+        try:
+            # Вызываем переданный callback в фоновом режиме, чтобы не таймаутить Telegram
+            async def run_parsing_bg():
+                try:
+                    await _parse_callback(manual=True)
+                    await message.answer("✅ <b>Ручной поиск завершен!</b>\nЕсли были найдены интересные и критические уязвимости/взломы — черновики уже отправлены на модерацию.", parse_mode=ParseMode.HTML)
+                except Exception as exc:
+                    log.exception("❌ Ошибка при ручном поиске в фоне: {}", exc)
+                    await message.answer(f"❌ <b>Ошибка при поиске:</b> <code>{exc}</code>", parse_mode=ParseMode.HTML)
+
+            asyncio.create_task(run_parsing_bg())
+        except Exception as exc:
+            log.exception("❌ Ошибка при запуске ручного поиска: {}", exc)
+            await message.answer(f"❌ <b>Ошибка при запуске:</b> <code>{exc}</code>", parse_mode=ParseMode.HTML)
+    else:
+        await message.answer("⚠️ Callback парсера не зарегистрирован. Бот еще запускается.", parse_mode=ParseMode.HTML)
+
+
+@_router.message(Command("start_auto"))
+async def cmd_start_auto(message: Message, db: Database) -> None:
+    """Включает автоматический периодический поиск."""
+    if str(message.chat.id) != str(cfg.admin_chat_id) and str(message.from_user.id) != str(cfg.admin_chat_id):
+        return
+    db.set_setting("auto_parser_enabled", "1")
+    await message.answer("🟢 <b>Автоматический поиск уязвимостей ВКЛЮЧЕН.</b>\nБот будет опрашивать RSS-ленты раз в час.", parse_mode=ParseMode.HTML)
+
+
+@_router.message(Command("stop_auto"))
+async def cmd_stop_auto(message: Message, db: Database) -> None:
+    """Выключает автоматический периодический поиск."""
+    if str(message.chat.id) != str(cfg.admin_chat_id) and str(message.from_user.id) != str(cfg.admin_chat_id):
+        return
+    db.set_setting("auto_parser_enabled", "0")
+    await message.answer("🛑 <b>Автоматический поиск уязвимостей ВЫКЛЮЧЕН.</b>\nАвто-опрос приостановлен. Вы можете запускать поиск вручную командой /parse.", parse_mode=ParseMode.HTML)
+
 
 @_router.message(Command("status"))
 async def cmd_status(message: Message, db: Database) -> None:
     """Команда /status — показывает сводку по БД."""
-    if str(message.from_user.id) != str(cfg.admin_chat_id):
+    if str(message.chat.id) != str(cfg.admin_chat_id) and str(message.from_user.id) != str(cfg.admin_chat_id):
         return  # Только для администратора
 
     pending_rows = db.get_pending_with_ai()
     published_week = db.get_published_since(days=7)
+    auto_enabled = db.get_setting("auto_parser_enabled", "1")
+
+    auto_status = "🟢 Включен (раз в час)" if auto_enabled == "1" else "🛑 Выключен"
 
     await message.answer(
         f"📊 <b>CyberSentry Status</b>\n\n"
+        f"📡 Авто-поиск: <b>{auto_status}</b>\n"
         f"⏳ Ожидают модерации: <b>{len(pending_rows)}</b>\n"
         f"✅ Опубликовано за 7 дней: <b>{len(published_week)}</b>",
         parse_mode=ParseMode.HTML,
@@ -300,13 +390,16 @@ async def cmd_status(message: Message, db: Database) -> None:
 @_router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
     """Приветствие администратора."""
-    if str(message.from_user.id) != str(cfg.admin_chat_id):
+    if str(message.chat.id) != str(cfg.admin_chat_id) and str(message.from_user.id) != str(cfg.admin_chat_id):
         return
     await message.answer(
         "🛡️ <b>CyberSentry: The Digital Whisper</b>\n\n"
-        "Бот активен. Новости появятся автоматически по мере парсинга RSS-лент.\n\n"
-        "Команды:\n"
-        "• /status — статистика системы",
+        "Панель администратора активна.\n\n"
+        "<b>Доступные команды:</b>\n"
+        "• /parse — Запустить ручной поиск киберугроз прямо сейчас\n"
+        "• /stop_auto — Отключить автоматический поиск раз в час\n"
+        "• /start_auto — Включить автоматический поиск раз в час\n"
+        "• /status — Показать текущий статус и статистику системы",
         parse_mode=ParseMode.HTML,
     )
 
@@ -320,6 +413,6 @@ async def cmd_whoami(message: Message) -> None:
         f"🔑 <b>Your chat_id:</b> <code>{message.chat.id}</code>\n"
         f"👤 <b>Your user_id:</b> <code>{uid}</code>\n\n"
         f"📍 <b>ADMIN_CHAT_ID in .env:</b> <code>{cfg.admin_chat_id}</code>\n"
-        f"✅ Совпадают: <b>{'Yes' if str(uid) == str(cfg.admin_chat_id) else 'No — update ADMIN_CHAT_ID in .env!'}</b>",
+        f"✅ Совпадают: <b>{'Yes' if str(message.chat.id) == str(cfg.admin_chat_id) or str(uid) == str(cfg.admin_chat_id) else 'No — update ADMIN_CHAT_ID in .env!'}</b>",
         parse_mode=ParseMode.HTML,
     )

@@ -65,10 +65,19 @@ class Database:
                     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
                 );
 
+                CREATE TABLE IF NOT EXISTS settings (
+                    key         TEXT    PRIMARY KEY,
+                    value       TEXT    NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_news_status     ON news(status);
                 CREATE INDEX IF NOT EXISTS idx_news_created_at ON news(created_at);
                 CREATE INDEX IF NOT EXISTS idx_news_is_viral   ON news(is_viral);
             """)
+            # По умолчанию автоматический парсинг включен
+            conn.execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_parser_enabled', '1')"
+            )
         log.info("✅ База данных инициализирована: {}", self.db_path)
 
     # ------------------------------------------------------------------
@@ -189,3 +198,20 @@ class Database:
                 """
             ).fetchall()
             return [r["id"] for r in rows]
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        """Получить значение настройки из БД."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (key,)
+            ).fetchone()
+            return row["value"] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Установить значение настройки в БД."""
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (key, value),
+            )
+        log.info("⚙️ Настройка БД [{}] → {}", key, value)

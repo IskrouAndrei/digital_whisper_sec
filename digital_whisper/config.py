@@ -151,7 +151,7 @@ def load_config() -> Config:
         rss_feeds=feeds,
 
         # Scheduler
-        parser_interval_minutes=_optional_int("PARSER_INTERVAL_MINUTES", 15),
+        parser_interval_minutes=_optional_int("PARSER_INTERVAL_MINUTES", 60),
         digest_day_of_week=_optional("DIGEST_DAY_OF_WEEK", "sun"),
         digest_hour=_optional_int("DIGEST_HOUR", 9),
 

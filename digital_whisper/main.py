@@ -83,6 +83,11 @@ async def process_new_articles(db: Database, new_ids: list[int]) -> None:
                 source=row["source"] or "Unknown",
             )
 
+            if ai_text == "SKIP":
+                db.set_status(news_id, "rejected")
+                log.info("⏭️  Новость #{} отфильтрована ИИ как неинтересная (SKIP)", news_id)
+                continue
+
             if ai_text:
                 db.update_ai_content(news_id, ai_text, ai_short or "")
                 # Отправляем черновик администратору
@@ -122,12 +127,19 @@ async def _process_pending_queue(db: Database) -> None:
 # Задание планировщика
 # ---------------------------------------------------------------------------
 
-async def parser_job(db: Database) -> None:
+async def parser_job(db: Database, manual: bool = False) -> None:
     """
     Задание APScheduler:
-      1. Парсит RSS-ленты
-      2. Запускает LLM-пайплайн для новых статей
+      1. Проверяет, включен ли автоматический парсинг (если не ручной запуск)
+      2. Парсит RSS-ленты
+      3. Запускает LLM-пайплайн для новых статей
     """
+    if not manual:
+        enabled = db.get_setting("auto_parser_enabled", "1")
+        if enabled == "0":
+            log.info("💤 [Scheduler] Автоматический парсинг отключен администратором — пропускаем")
+            return
+
     try:
         log.info("⏰ [Scheduler] Запуск RSS-парсинга...")
         new_ids = await parse_and_store(db)
@@ -143,6 +155,16 @@ async def parser_job(db: Database) -> None:
             f"[CRITICAL] Ошибка RSS-парсера:\n{exc}\n\n{traceback.format_exc()[:1000]}",
             exc,
         )
+
+
+async def weekly_digest_job(db: Database, bot: Bot) -> None:
+    """Задание планировщика для генерации еженедельного дайджеста."""
+    try:
+        from publishers.habr_generator import generate_and_send_weekly_digest
+        await generate_and_send_weekly_digest(db, bot)
+    except Exception as exc:
+        log.exception("💥 Ошибка в weekly_digest_job: {}", exc)
+        await send_alert(f"[CRITICAL] Ошибка еженедельного дайджеста:\n{exc}", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -186,14 +208,22 @@ async def main() -> None:
         max_instances=1,
     )
 
-    # Первый запуск — сразу при старте
+    # Еженедельный дайджест для Хабра
     scheduler.add_job(
-        parser_job,
-        trigger="date",
-        args=[db],
-        id="rss_parser_initial",
-        name="RSS Parser (initial)",
+        weekly_digest_job,
+        trigger="cron",
+        day_of_week=cfg.digest_day_of_week,
+        hour=cfg.digest_hour,
+        minute=0,
+        args=[db, bot],
+        id="weekly_digest",
+        name="Weekly Habr Digest",
+        replace_existing=True,
     )
+
+    # Регистрируем callback для ручного парсинга в Telegram-боте
+    from bot_handlers import register_parse_callback
+    register_parse_callback(parser_job)
 
     scheduler.start()
     log.info("⏰ Планировщик запущен")
