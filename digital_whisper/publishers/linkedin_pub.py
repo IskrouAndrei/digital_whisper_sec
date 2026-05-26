@@ -78,6 +78,7 @@ async def publish_to_linkedin(row: Any) -> bool:
         True  — успешно опубликовано ИЛИ платформа не настроена (пропуск).
         False — ошибка API при попытке публикации.
     """
+    row = dict(row)
     # Токен доступа
     access_token = (cfg.linkedin_access_token or "").split("#")[0].strip()
     if not access_token or access_token.startswith("your_"):
