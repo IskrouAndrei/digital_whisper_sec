@@ -66,6 +66,7 @@ class Config:
     # --- LinkedIn ---
     linkedin_access_token: str
     linkedin_person_urn: str
+    linkedin_user_id: str         # Алиас: LINKEDIN_USER_ID (приоритет над person_urn)
 
     # --- Threads ---
     threads_user_id: str
@@ -142,6 +143,7 @@ def load_config() -> Config:
         # LinkedIn (опционально)
         linkedin_access_token=_optional("LINKEDIN_ACCESS_TOKEN"),
         linkedin_person_urn=_optional("LINKEDIN_PERSON_URN"),
+        linkedin_user_id=_optional("LINKEDIN_USER_ID"),
 
         # Threads (опционально)
         threads_user_id=_optional("THREADS_USER_ID"),

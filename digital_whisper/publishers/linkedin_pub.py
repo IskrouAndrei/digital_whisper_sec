@@ -1,112 +1,167 @@
 """
-publishers/linkedin_pub.py — Публикация в LinkedIn через REST API (ugcPosts).
+publishers/linkedin_pub.py — Публикация в LinkedIn через REST API v2 (Posts).
 
-Использует aiohttp для асинхронных HTTP-запросов к API LinkedIn.
-Пропускает публикацию, если токены не настроены.
+Поддерживает:
+  - LINKEDIN_USER_ID  (числовой ID или URN — приоритет)
+  - LINKEDIN_PERSON_URN (устаревшее имя, fallback)
+
+Ключи берутся только из окружения (.env на сервере), не из кода.
+Пропускает публикацию, если токены не настроены (graceful degradation).
 """
 
+import re
 import aiohttp
-from typing import Any
+from typing import Any, Optional
 
 from config import cfg
 from logger import log
 
+# ---------------------------------------------------------------------------
+# Вспомогательные функции
+# ---------------------------------------------------------------------------
 
-def _format_linkedin_text(row: Any) -> str:
-    """Форматирует текст сообщения для LinkedIn."""
-    hashtags = "#cybersecurity #infosec #cybersec"
-    viral_badge = "\n\n🔥 Trending" if row["is_viral"] else ""
-    
+def _strip_html(text: str) -> str:
+    """Убирает HTML-теги — LinkedIn не поддерживает HTML в тексте поста."""
+    clean = re.sub(r"<[^>]+>", "", text)
+    # Убираем лишние пустые строки после удаления тегов
+    clean = re.sub(r"\n{3,}", "\n\n", clean)
+    return clean.strip()
+
+
+def _get_person_urn() -> Optional[str]:
+    """
+    Определяет URN автора публикации.
+    Приоритет: LINKEDIN_USER_ID → LINKEDIN_PERSON_URN.
+    Поддерживает числовые ID и полные URN-строки.
+    """
+    # Читаем оба варианта (с зачисткой inline-комментариев)
+    user_id = (cfg.linkedin_user_id or "").split("#")[0].strip()
+    person_urn = (cfg.linkedin_person_urn or "").split("#")[0].strip()
+
+    raw = user_id or person_urn
+    if not raw:
+        return None
+
+    # Уже полный URN — возвращаем как есть
+    if raw.startswith("urn:li:"):
+        return raw
+
+    # Числовой ID или строковый — оборачиваем в person URN
+    return f"urn:li:person:{raw}"
+
+
+def _build_post_text(row: Any) -> str:
+    """Формирует текст поста для LinkedIn (без HTML, с хэштегами)."""
+    # LinkedIn не рендерит HTML — очищаем
+    clean_text = _strip_html(row["ai_text"] or "")
+
+    viral_badge = "\n\n🔥 Trending" if row.get("is_viral") else ""
+    hashtags = "#cybersecurity #infosec #threatintel"
+
     return (
-        f"{row['ai_text']}"
+        f"{clean_text}"
         f"{viral_badge}\n\n"
-        f"🔗 Original feed: {row['url']}\n\n"
+        f"🔗 {row['url']}\n\n"
         f"{hashtags}"
     )
 
 
+# ---------------------------------------------------------------------------
+# Публичный API
+# ---------------------------------------------------------------------------
+
 async def publish_to_linkedin(row: Any) -> bool:
     """
-    Публикует новость в LinkedIn с оформлением в виде Link Card.
-    
+    Публикует пост в LinkedIn от имени личного аккаунта.
+
     Returns:
-        True при успехе или если платформа не настроена (пропуск).
-        False при ошибке публикации.
+        True  — успешно опубликовано ИЛИ платформа не настроена (пропуск).
+        False — ошибка API при попытке публикации.
     """
-    # Пропускаем, если LinkedIn не настроен
-    if (
-        not cfg.linkedin_access_token
-        or not cfg.linkedin_person_urn
-        or "your_linkedin" in cfg.linkedin_access_token
-    ):
-        log.info("⏭️  [LinkedIn Publisher] Интеграция с LinkedIn не настроена (пропуск)")
+    # Токен доступа
+    access_token = (cfg.linkedin_access_token or "").split("#")[0].strip()
+    if not access_token or access_token.startswith("your_"):
+        log.info("⏭️  [LinkedIn] Токен не настроен — пропускаем")
         return True
 
-    if not row["ai_text"]:
-        log.error("❌ [LinkedIn Publisher] ai_text пустой для новости #{}", row["id"])
+    # URN автора
+    author_urn = _get_person_urn()
+    if not author_urn:
+        log.info("⏭️  [LinkedIn] LINKEDIN_USER_ID / LINKEDIN_PERSON_URN не заданы — пропускаем")
+        return True
+
+    if not row.get("ai_text"):
+        log.error("❌ [LinkedIn] ai_text пустой для новости #{}", row["id"])
         return False
 
-    text = _format_linkedin_text(row)
-    urn = cfg.linkedin_person_urn.strip()
+    text = _build_post_text(row)
+    log.info("📢 [LinkedIn] Публикация новости #{}... (author={})", row["id"], author_urn)
 
-    # Если URN не содержит префикса, добавляем по умолчанию urn:li:person:
-    if not urn.startswith("urn:li:"):
-        urn = f"urn:li:person:{urn}"
-
-    log.info("📢 [LinkedIn Publisher] Публикация новости #{} в LinkedIn...", row["id"])
-
-    # Формируем JSON-тело согласно LinkedIn ugcPosts API
+    # LinkedIn Posts API v2 — актуальный эндпоинт
     payload = {
-        "author": urn,
-        "lifecycleState": "PUBLISHED",
-        "specificContent": {
-            "com.linkedin.ugc.ShareContent": {
-                "shareCommentary": {
-                    "text": text
-                },
-                "shareMediaCategory": "ARTICLE",
-                "media": [
-                    {
-                        "status": "READY",
-                        "originalUrl": row["url"],
-                        "title": {
-                            "text": row["title"]
-                        }
-                    }
-                ]
+        "author": author_urn,
+        "commentary": text,
+        "visibility": "PUBLIC",
+        "distribution": {
+            "feedDistribution": "MAIN_FEED",
+            "targetEntities": [],
+            "thirdPartyDistributionChannels": []
+        },
+        "content": {
+            "article": {
+                "source": row["url"],
+                "title": row.get("title", "")[:200],  # LinkedIn: макс 200 символов в заголовке
             }
         },
-        "visibility": {
-            "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
-        }
+        "lifecycleState": "PUBLISHED",
+        "isReshareDisabledByAuthor": False
     }
 
     headers = {
-        "Authorization": f"Bearer {cfg.linkedin_access_token}",
+        "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
-        "X-Restli-Protocol-Version": "2.0.0"
+        "X-Restli-Protocol-Version": "2.0.0",
+        "LinkedIn-Version": "202501",   # Актуальная версия API
     }
 
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                "https://api.linkedin.com/v2/ugcPosts",
+                "https://api.linkedin.com/rest/posts",
                 json=payload,
                 headers=headers,
-                timeout=15.0
+                timeout=aiohttp.ClientTimeout(total=20),
             ) as response:
                 if response.status in (200, 201):
-                    log.info("✅ [LinkedIn Publisher] Новость #{} успешно опубликована в LinkedIn", row["id"])
+                    post_id = response.headers.get("x-restli-id", "unknown")
+                    log.info("✅ [LinkedIn] Новость #{} опубликована. Post ID: {}", row["id"], post_id)
                     return True
-                
+
                 error_body = await response.text()
                 log.error(
-                    "❌ [LinkedIn Publisher] Ошибка API LinkedIn. Статус: {}, Ответ: {}",
+                    "❌ [LinkedIn] Ошибка API. Статус: {}, Ответ: {:.500}",
                     response.status,
-                    error_body
+                    error_body,
                 )
+
+                # 401 — токен истёк или неверный
+                if response.status == 401:
+                    log.error("❌ [LinkedIn] Токен недействителен или истёк. Обнови LINKEDIN_ACCESS_TOKEN.")
+                # 403 — нет прав (scope)
+                elif response.status == 403:
+                    log.error(
+                        "❌ [LinkedIn] Нет прав на публикацию. "
+                        "Убедись что в LinkedIn App включены scopes: w_member_social, r_liteprofile"
+                    )
+
                 return False
 
+    except aiohttp.ClientConnectorError as exc:
+        log.error("❌ [LinkedIn] Ошибка соединения: {}", exc)
+        return False
+    except aiohttp.ServerTimeoutError:
+        log.error("❌ [LinkedIn] Timeout при запросе к LinkedIn API")
+        return False
     except Exception as exc:
-        log.exception("💥 [LinkedIn Publisher] Неожиданная ошибка при запросе к LinkedIn API: {}", exc)
+        log.exception("💥 [LinkedIn] Неожиданная ошибка: {}", exc)
         return False
