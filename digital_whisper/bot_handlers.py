@@ -38,7 +38,6 @@ from database import Database
 from logger import log
 from publishers.tg_publisher import publish_to_telegram
 from publishers.vk_publisher import publish_to_vk
-from publishers.x_publisher import publish_to_x
 from publishers.threads_pub import publish_to_threads
 
 # ---------------------------------------------------------------------------
@@ -111,12 +110,10 @@ def get_dispatcher(db: Database) -> Dispatcher:
 def _moderation_keyboard(
     news_id: int,
     tg_done: bool = False,
-    x_done: bool = False,
     selected_format: str = "standard",
 ) -> InlineKeyboardMarkup:
     """Генерирует Inline-клавиатуру для черновика новости."""
     tg_label = "📢 Telegram ✅" if tg_done else "📢 Telegram"
-    x_label = "🐦 X.com ✅" if x_done else "🐦 X.com"
     
     # Кнопка переключения формата
     if selected_format == "deep":
@@ -131,7 +128,6 @@ def _moderation_keyboard(
         ],
         [
             InlineKeyboardButton(text=tg_label, callback_data=f"tgonly_{news_id}"),
-            InlineKeyboardButton(text=x_label,  callback_data=f"x_{news_id}"),
         ],
         [
             format_btn
@@ -183,7 +179,7 @@ def _format_draft(row) -> str:
         f"🔗 <a href='{row['url']}'>Оригинал</a>\n\n"
         f"<b>📋 Черновик для публикации:</b>\n"
         f"{active_text}\n\n"
-        f"<i>Короткая версия (X/Threads):</i>\n"
+        f"<i>Короткая версия (Threads):</i>\n"
         f"<code>{row['ai_short'] or '⚠️ ai_short не готов'}</code>"
     )
 
@@ -288,16 +284,15 @@ async def handle_approve(callback: CallbackQuery, db: Database) -> None:
         await callback.answer("⚠️ Ошибка публикации в Telegram. См. логи", show_alert=True)
         return
 
-    # --- Публикация на другие платформы (VK, X, Threads) ---
+    # --- Публикация на другие платформы (VK, Threads) ---
     import asyncio
     results = await asyncio.gather(
         publish_to_vk(row),
-        publish_to_x(row),
         publish_to_threads(row),
         return_exceptions=True
     )
 
-    platforms = ["VK", "X (Twitter)", "Threads"]
+    platforms = ["VK", "Threads"]
     success_platforms = ["Telegram"]
     failed_platforms = []
 
@@ -389,7 +384,6 @@ async def handle_telegram_only(callback: CallbackQuery, db: Database) -> None:
         new_keyboard = _moderation_keyboard(
             news_id,
             tg_done=True,
-            x_done=False,
             selected_format=selected_fmt,
         )
         try:
@@ -400,42 +394,6 @@ async def handle_telegram_only(callback: CallbackQuery, db: Database) -> None:
     else:
         await callback.answer(
             "❌ Ошибка публикации в Telegram. Проверь логи.",
-            show_alert=True,
-        )
-
-@_router.callback_query(F.data.startswith("x_"))
-async def handle_x_only(callback: CallbackQuery, db: Database) -> None:
-    """Публикует новость ТОЛЬКО в X.com (без смены общего статуса)."""
-    news_id = int(callback.data.split("_")[1])
-    row = db.get_by_id(news_id)
-
-    if not row:
-        await callback.answer("❌ Новость не найдена в БД", show_alert=True)
-        return
-
-    await callback.answer("🐦 Публикую в X.com...")
-    log.info("👤 Ручная публикация #{} в X.com", news_id)
-
-    ok = await publish_to_x(row)
-
-    if ok:
-        updated_row = db.get_by_id(news_id)
-        row_dict = dict(updated_row)
-        selected_fmt = row_dict.get("selected_format", "standard")
-        new_keyboard = _moderation_keyboard(
-            news_id, 
-            tg_done=False, 
-            x_done=True,
-            selected_format=selected_fmt
-        )
-        try:
-            await callback.message.edit_reply_markup(reply_markup=new_keyboard)
-        except TelegramAPIError:
-            pass
-        await callback.answer("✅ Опубликовано в X.com!", show_alert=True)
-    else:
-        await callback.answer(
-            "❌ Ошибка публикации в X.com. Проверь логи.",
             show_alert=True,
         )
 
@@ -480,7 +438,6 @@ async def handle_change_format(callback: CallbackQuery, db: Database) -> None:
     keyboard = _moderation_keyboard(
         news_id,
         tg_done=False,
-        x_done=False,
         selected_format=fmt,
     )
 
