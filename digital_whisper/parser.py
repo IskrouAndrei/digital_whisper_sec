@@ -36,6 +36,13 @@ RSS_SOURCES: dict[str, str] = {
     "Habr Infosec":          "https://habr.com/ru/rss/hub/infosecurity/",
     "Xakep":                 "https://xakep.ru/feed/",
     "SecurityLab":           "https://www.securitylab.ru/_services/export/rss/",
+    "vx-underground":        "https://tg.i-c-a.su/rss/vxunderground",
+    "FalconFeedsio":         "https://tg.i-c-a.su/rss/falconfeedsio",
+    "SecurityWeek":          "https://feeds.feedburner.com/securityweek",
+    "SecAtor":               "https://tg.i-c-a.su/rss/true_secator",
+    "НеКасперский":          "https://tg.i-c-a.su/rss/NeKaspersky",
+    "Offensive Twitter":     "https://tg.i-c-a.su/rss/OffensiveTwitter",
+    "CoinDesk":              "https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml",
 }
 
 

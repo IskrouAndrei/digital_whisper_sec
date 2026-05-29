@@ -117,7 +117,14 @@ def load_config() -> Config:
         "https://krebsonsecurity.com/feed/,"
         "https://habr.com/ru/rss/hub/infosecurity/,"
         "https://xakep.ru/feed/,"
-        "https://www.securitylab.ru/_services/export/rss/"
+        "https://www.securitylab.ru/_services/export/rss/,"
+        "https://tg.i-c-a.su/rss/vxunderground,"
+        "https://tg.i-c-a.su/rss/falconfeedsio,"
+        "https://feeds.feedburner.com/securityweek,"
+        "https://tg.i-c-a.su/rss/true_secator,"
+        "https://tg.i-c-a.su/rss/NeKaspersky,"
+        "https://tg.i-c-a.su/rss/OffensiveTwitter,"
+        "https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml"
     ))
     feeds = [f.strip() for f in raw_feeds.split(",") if f.strip()]
 
