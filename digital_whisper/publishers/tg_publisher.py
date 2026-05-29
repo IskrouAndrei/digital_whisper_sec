@@ -23,8 +23,16 @@ def _format_channel_post(row) -> str:
     # Признак вирусного контента (для Пикабу)
     viral_badge = "\n\n🔥 <b>Trending</b>" if row["is_viral"] else ""
 
+    # Поддержка переключения форматов
+    row_dict = dict(row)
+    selected_format = row_dict.get("selected_format") or "standard"
+    if selected_format == "deep" and row_dict.get("ai_text_deep"):
+        content_text = row_dict["ai_text_deep"]
+    else:
+        content_text = row_dict["ai_text"] or ""
+
     return (
-        f"{row['ai_text']}"
+        f"{content_text}"
         f"{viral_badge}\n\n"
         f"🔗 <a href='{row['url']}'>Источник: {row['source'] or 'Original'}</a>\n\n"
         f"{hashtags}"
@@ -42,9 +50,16 @@ async def publish_to_telegram(bot: Bot, row) -> bool:
     Returns:
         True при успехе, False при ошибке
     """
-    if not row["ai_text"]:
-        log.error("❌ [TG Publisher] ai_text пустой для новости #{}", row["id"])
-        return False
+    row_dict = dict(row)
+    selected_format = row_dict.get("selected_format") or "standard"
+    if selected_format == "deep":
+        if not row_dict.get("ai_text_deep"):
+            log.error("❌ [TG Publisher] ai_text_deep пустой для новости #{}", row_dict["id"])
+            return False
+    else:
+        if not row_dict.get("ai_text"):
+            log.error("❌ [TG Publisher] ai_text пустой для новости #{}", row_dict["id"])
+            return False
 
     text = _format_channel_post(row)
 

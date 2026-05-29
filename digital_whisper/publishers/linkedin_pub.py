@@ -52,16 +52,23 @@ def _get_person_urn() -> Optional[str]:
 
 def _build_post_text(row: Any) -> str:
     """Формирует текст поста для LinkedIn (без HTML, с хэштегами)."""
-    # LinkedIn не рендерит HTML — очищаем
-    clean_text = _strip_html(row["ai_text"] or "")
+    row_dict = dict(row)
+    selected_format = row_dict.get("selected_format") or "standard"
+    if selected_format == "deep" and row_dict.get("ai_text_deep"):
+        content_text = row_dict["ai_text_deep"]
+    else:
+        content_text = row_dict["ai_text"] or ""
 
-    viral_badge = "\n\n🔥 Trending" if row.get("is_viral") else ""
+    # LinkedIn не рендерит HTML — очищаем
+    clean_text = _strip_html(content_text)
+
+    viral_badge = "\n\n🔥 Trending" if row_dict.get("is_viral") else ""
     hashtags = "#cybersecurity #infosec #threatintel"
 
     return (
         f"{clean_text}"
         f"{viral_badge}\n\n"
-        f"🔗 {row['url']}\n\n"
+        f"🔗 {row_dict['url']}\n\n"
         f"{hashtags}"
     )
 
@@ -91,9 +98,15 @@ async def publish_to_linkedin(row: Any) -> bool:
         log.info("⏭️  [LinkedIn] LINKEDIN_USER_ID / LINKEDIN_PERSON_URN не заданы — пропускаем")
         return True
 
-    if not row.get("ai_text"):
-        log.error("❌ [LinkedIn] ai_text пустой для новости #{}", row["id"])
-        return False
+    selected_format = row.get("selected_format") or "standard"
+    if selected_format == "deep":
+        if not row.get("ai_text_deep"):
+            log.error("❌ [LinkedIn] ai_text_deep пустой для новости #{}", row["id"])
+            return False
+    else:
+        if not row.get("ai_text"):
+            log.error("❌ [LinkedIn] ai_text пустой для новости #{}", row["id"])
+            return False
 
     text = _build_post_text(row)
     log.info("📢 [LinkedIn] Публикация новости #{}... (author={})", row["id"], author_urn)

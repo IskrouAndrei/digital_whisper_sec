@@ -113,10 +113,18 @@ def _moderation_keyboard(
     news_id: int,
     tg_done: bool = False,
     linkedin_done: bool = False,
+    selected_format: str = "standard",
 ) -> InlineKeyboardMarkup:
     """Генерирует Inline-клавиатуру для черновика новости."""
     tg_label = "📢 Telegram ✅" if tg_done else "📢 Telegram"
     linkedin_label = "🔗 LinkedIn ✅" if linkedin_done else "🔗 LinkedIn"
+    
+    # Кнопка переключения формата
+    if selected_format == "deep":
+        format_btn = InlineKeyboardButton(text="⚡️ Шаблон: Стандарт", callback_data=f"format_standard_{news_id}")
+    else:
+        format_btn = InlineKeyboardButton(text="🔍 Шаблон: Deep Dive", callback_data=f"format_deep_{news_id}")
+
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ Опубликовать везде", callback_data=f"approve_{news_id}"),
@@ -126,6 +134,9 @@ def _moderation_keyboard(
             InlineKeyboardButton(text=tg_label,       callback_data=f"tgonly_{news_id}"),
             InlineKeyboardButton(text=linkedin_label, callback_data=f"linkedin_{news_id}"),
         ],
+        [
+            format_btn
+        ]
     ])
 
 
@@ -156,13 +167,23 @@ def _format_draft(row) -> str:
     except Exception:
         pass
 
+    selected_format = row.get("selected_format") or "standard"
+    
+    if selected_format == "deep":
+        active_format_title = "🔍 <b>Глубокий разбор (Deep Dive)</b>"
+        active_text = row.get("ai_text_deep") or "⚠️ Глубокий разбор не сгенерирован"
+    else:
+        active_format_title = "⚡️ <b>Стандартный формат</b>"
+        active_text = row.get("ai_text") or "⚠️ ai_text не готов"
+
     return (
         f"🔵 <b>НОВАЯ НОВОСТЬ #{row['id']}</b>\n"
         f"📰 <b>Источник:</b> {row['source'] or '—'}\n"
         f"📅 <b>Опубликовано:</b> {formatted_time}\n"
+        f"🎯 <b>Формат:</b> {active_format_title}\n"
         f"🔗 <a href='{row['url']}'>Оригинал</a>\n\n"
         f"<b>📋 Черновик для публикации:</b>\n"
-        f"{row['ai_text'] or '⚠️ ai_text не готов'}\n\n"
+        f"{active_text}\n\n"
         f"<i>Короткая версия (X/Threads):</i>\n"
         f"<code>{row['ai_short'] or '⚠️ ai_short не готов'}</code>"
     )
@@ -215,9 +236,12 @@ async def send_draft_to_admin(db: Database, news_id: int) -> bool:
         log.warning("⚠️  Новость #{} не имеет ai_text, пропускаем", news_id)
         return False
 
+    row_dict = dict(row)
+    selected_fmt = row_dict.get("selected_format", "standard")
+
     bot = get_bot()
     text = _format_draft(row)
-    keyboard = _moderation_keyboard(news_id)
+    keyboard = _moderation_keyboard(news_id, selected_format=selected_fmt)
 
     try:
         await bot.send_message(
@@ -362,10 +386,13 @@ async def handle_telegram_only(callback: CallbackQuery, db: Database) -> None:
 
     if ok:
         updated_row = db.get_by_id(news_id)
+        row_dict = dict(updated_row)
+        selected_fmt = row_dict.get("selected_format", "standard")
         new_keyboard = _moderation_keyboard(
             news_id,
             tg_done=True,
             linkedin_done=False,
+            selected_format=selected_fmt,
         )
         try:
             await callback.message.edit_reply_markup(reply_markup=new_keyboard)
@@ -394,7 +421,15 @@ async def handle_linkedin_only(callback: CallbackQuery, db: Database) -> None:
     ok = await publish_to_linkedin(row)
 
     if ok:
-        new_keyboard = _moderation_keyboard(news_id, tg_done=False, linkedin_done=True)
+        updated_row = db.get_by_id(news_id)
+        row_dict = dict(updated_row)
+        selected_fmt = row_dict.get("selected_format", "standard")
+        new_keyboard = _moderation_keyboard(
+            news_id, 
+            tg_done=False, 
+            linkedin_done=True,
+            selected_format=selected_fmt
+        )
         try:
             await callback.message.edit_reply_markup(reply_markup=new_keyboard)
         except TelegramAPIError:
@@ -405,6 +440,62 @@ async def handle_linkedin_only(callback: CallbackQuery, db: Database) -> None:
             "❌ Ошибка публикации в LinkedIn. Проверь логи.",
             show_alert=True,
         )
+
+@_router.callback_query(F.data.startswith("format_"))
+async def handle_change_format(callback: CallbackQuery, db: Database) -> None:
+    """Администратор сменил формат публикации."""
+    parts = callback.data.split("_")
+    fmt = parts[1]  # standard or deep
+    news_id = int(parts[2])
+    
+    row = db.get_by_id(news_id)
+    if not row:
+        await callback.answer("❌ Новость не найдена в БД", show_alert=True)
+        return
+
+    row_dict = dict(row)
+
+    # Если выбран Deep Dive, но он пустой (для старых записей), лениво генерируем его
+    if fmt == "deep" and not row_dict.get("ai_text_deep"):
+        await callback.answer("🤖 Генерирую Глубокий разбор... Пожалуйста, подождите...")
+        from llm_service import generate_deep_dive_only
+        ai_text_deep = await generate_deep_dive_only(
+            title=row_dict["title"],
+            raw_text=row_dict["raw_text"] or "",
+            url=row_dict["url"],
+            source=row_dict["source"] or "Unknown",
+        )
+        if ai_text_deep:
+            db.update_ai_deep_content(news_id, ai_text_deep)
+            row = db.get_by_id(news_id)  # Перечитываем запись
+            row_dict = dict(row)
+        else:
+            await callback.answer("❌ Не удалось сгенерировать Deep Dive через LLM", show_alert=True)
+            return
+
+    # Сохраняем выбор в БД
+    db.set_selected_format(news_id, fmt)
+    row = db.get_by_id(news_id)  # Перечитываем актуальную версию с новым selected_format
+
+    text = _format_draft(row)
+    keyboard = _moderation_keyboard(
+        news_id,
+        tg_done=False,
+        linkedin_done=False,
+        selected_format=fmt,
+    )
+
+    try:
+        await callback.message.edit_text(
+            text=text,
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+            parse_mode=ParseMode.HTML,
+        )
+    except TelegramAPIError as e:
+        log.warning("⚠️ Ошибка редактирования сообщения: {}", e)
+
+    await callback.answer(f"📋 Шаблон изменен на: {'Глубокий разбор' if fmt == 'deep' else 'Стандартный'}")
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------

@@ -76,7 +76,7 @@ async def process_new_articles(db: Database, new_ids: list[int]) -> None:
             continue
 
         try:
-            ai_text, ai_short = await generate_post(
+            ai_text, ai_short, ai_text_deep = await generate_post(
                 title=row["title"],
                 raw_text=row["raw_text"] or "",
                 url=row["url"],
@@ -89,7 +89,7 @@ async def process_new_articles(db: Database, new_ids: list[int]) -> None:
                 continue
 
             if ai_text:
-                db.update_ai_content(news_id, ai_text, ai_short or "")
+                db.update_ai_content(news_id, ai_text, ai_short or "", ai_text_deep)
                 # Отправляем черновик администратору
                 await send_draft_to_admin(db, news_id)
             else:

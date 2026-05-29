@@ -18,8 +18,15 @@ def _format_vk_post(row: Any) -> str:
     hashtags = "#кибербезопасность #infosec #cybersecurity"
     viral_badge = "\n\n🔥 Trending" if row["is_viral"] else ""
 
+    row_dict = dict(row)
+    selected_format = row_dict.get("selected_format") or "standard"
+    if selected_format == "deep" and row_dict.get("ai_text_deep"):
+        content_text = row_dict["ai_text_deep"]
+    else:
+        content_text = row_dict["ai_text"] or ""
+
     return (
-        f"{row['ai_text']}"
+        f"{content_text}"
         f"{viral_badge}\n\n"
         f"🔗 Источник: {row['source'] or 'Original'} ({row['url']})\n\n"
         f"{hashtags}"
@@ -63,9 +70,16 @@ async def publish_to_vk(row: Any) -> bool:
         log.info("⏭️  [VK Publisher] Интеграция с VK не настроена (пропуск)")
         return True
 
-    if not row["ai_text"]:
-        log.error("❌ [VK Publisher] ai_text пустой для новости #{}", row["id"])
-        return False
+    row_dict = dict(row)
+    selected_format = row_dict.get("selected_format") or "standard"
+    if selected_format == "deep":
+        if not row_dict.get("ai_text_deep"):
+            log.error("❌ [VK Publisher] ai_text_deep пустой для новости #{}", row_dict["id"])
+            return False
+    else:
+        if not row_dict.get("ai_text"):
+            log.error("❌ [VK Publisher] ai_text пустой для новости #{}", row_dict["id"])
+            return False
 
     text = _format_vk_post(row)
     log.info("📢 [VK Publisher] Публикация новости #{} в VK...", row["id"])

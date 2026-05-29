@@ -58,6 +58,8 @@ class Database:
                     raw_text    TEXT,
                     ai_text     TEXT,
                     ai_short    TEXT,
+                    ai_text_deep TEXT,
+                    selected_format TEXT NOT NULL DEFAULT 'standard',
                     url         TEXT    UNIQUE NOT NULL,
                     source      TEXT,
                     status      TEXT    NOT NULL DEFAULT 'pending',
@@ -80,6 +82,20 @@ class Database:
             try:
                 conn.execute("ALTER TABLE news ADD COLUMN published_at TEXT;")
                 log.info("💾 Схема БД обновлена: добавлена колонка published_at")
+            except sqlite3.OperationalError:
+                pass  # Колонка уже существует
+
+            # Миграция: добавляем колонку ai_text_deep, если база данных была создана ранее
+            try:
+                conn.execute("ALTER TABLE news ADD COLUMN ai_text_deep TEXT;")
+                log.info("💾 Схема БД обновлена: добавлена колонка ai_text_deep")
+            except sqlite3.OperationalError:
+                pass  # Колонка уже существует
+
+            # Миграция: добавляем колонку selected_format, если база данных была создана ранее
+            try:
+                conn.execute("ALTER TABLE news ADD COLUMN selected_format TEXT NOT NULL DEFAULT 'standard';")
+                log.info("💾 Схема БД обновлена: добавлена колонка selected_format")
             except sqlite3.OperationalError:
                 pass  # Колонка уже существует
 
@@ -135,14 +151,35 @@ class Database:
         news_id: int,
         ai_text: str,
         ai_short: str,
+        ai_text_deep: Optional[str] = None,
     ) -> None:
         """Сохраняет результат LLM-обработки."""
         with self._connect() as conn:
             conn.execute(
-                "UPDATE news SET ai_text = ?, ai_short = ? WHERE id = ?",
-                (ai_text, ai_short, news_id),
+                "UPDATE news SET ai_text = ?, ai_short = ?, ai_text_deep = ? WHERE id = ?",
+                (ai_text, ai_short, ai_text_deep, news_id),
             )
         log.debug("🤖 AI-контент обновлён [id={}]", news_id)
+
+    def update_ai_deep_content(self, news_id: int, ai_text_deep: str) -> None:
+        """Сохраняет только глубокий разбор (Deep Dive) для существующей новости."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE news SET ai_text_deep = ? WHERE id = ?",
+                (ai_text_deep, news_id),
+            )
+        log.debug("🤖 AI-deep контент обновлён [id={}]", news_id)
+
+    def set_selected_format(self, news_id: int, selected_format: str) -> None:
+        """Устанавливает выбранный формат публикации ('standard' или 'deep')."""
+        if selected_format not in {"standard", "deep"}:
+            raise ValueError(f"Недопустимый формат: {selected_format}")
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE news SET selected_format = ? WHERE id = ?",
+                (selected_format, news_id),
+            )
+        log.info("📌 Выбран формат для новости [id={}] → {}", news_id, selected_format)
 
     def set_status(self, news_id: int, status: str) -> None:
         """Устанавливает статус: pending | approved | rejected | published."""

@@ -71,6 +71,35 @@ APT-атаках и хакерских группах (Россия, Китай,
 НЕ копируй шаблон целиком — адаптируй под содержание.
 """
 
+_SYSTEM_DEEP_DIVE = """
+Ты — ведущий аналитик ИБ и автор Telegram-канала для IT-специалистов и крипто-аналитиков.
+Превращай сырую новость в глубокий и структурированный пост-анализ (Deep Dive).
+
+ПРАВИЛА И СТИЛЬ:
+- HTML-теги для выделения ключевых слов: <b>жирный</b> для ключевых сущностей, <code>код</code> для CVE, версий, команд, путей, языков программирования, платформ.
+- Не используй маркеры списков • в этом формате, используй пустые строки для разделения блоков.
+- Пиши техническим языком, избегай маркетинговой чепухи.
+- Объём: до 1500 символов.
+
+СТРУКТУРА ПОСТА:
+Каждый пост должен СТРОГО состоять из следующих разделов (с точным соответствием названий):
+
+[Заголовок] (Строка 1): [Название атаки/уязвимости]: [Суть в 4-6 словах, без точки в конце]
+
+[Вводный абзац]: [Название источника] сообщает о [кратком описании события: масштаб, кого затронуло]. Технически это [оценка важности/критичности, например: одна из самых изощренных кампаний / критическая RCE-брешь].
+
+Технические детали:
+[Подробный технический анализ: вектор атаки, как вредоносный код попадает в систему, какие файлы/процессы затрагивает, технические особенности].
+
+Главная инновация:
+[В чем уникальность этой угрозы / почему старые методы обнаружения не работают / какая новая техника или тактика использована злоумышленниками].
+
+Последствия для рынка:
+[Широкий контекст: бизнес-риски, влияние на инфраструктуру, облачные среды, DeFi-сегмент, CI/CD-пайплайны или конкретные технологические стеки].
+
+Рекомендации: [Конкретные и понятные шаги для защиты, аудита или митигации рисков].
+"""
+
 _SYSTEM_SHORT = """Ты — технический копирайтер для X (Twitter).
 Сжимай новость кибербезопасности в ультра-емкий твит.
 
@@ -166,9 +195,9 @@ async def generate_post(
     raw_text: str,
     url: str,
     source: str,
-) -> tuple[Optional[str], Optional[str]]:
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """
-    Генерирует (ai_text, ai_short) для одной новости.
+    Генерирует (ai_text, ai_short, ai_text_deep) для одной новости.
 
     Args:
         title:    Заголовок из RSS
@@ -177,7 +206,7 @@ async def generate_post(
         source:   Название источника (BleepingComputer и т.д.)
 
     Returns:
-        (ai_text, ai_short) — оба могут быть None при ошибке API
+        (ai_text, ai_short, ai_text_deep) — все могут быть None при ошибке API
     """
     user_prompt = (
         f"Источник: {source}\n"
@@ -193,27 +222,58 @@ async def generate_post(
         f"Напиши твит для X (до 240 символов)."
     )
 
-    log.info("🤖 Генерация поста для: {}", title[:70])
+    log.info("🤖 Генерация постов для: {}", title[:70])
 
-    # Запускаем оба запроса параллельно
-    ai_text, ai_short = await asyncio.gather(
-        _chat(_SYSTEM_CYBERSEC, user_prompt, max_tokens=420, temperature=0.35),
-        _chat(_SYSTEM_SHORT,    short_prompt, max_tokens=100, temperature=0.2),
+    # Запускаем все три запроса параллельно
+    ai_text, ai_short, ai_text_deep = await asyncio.gather(
+        _chat(_SYSTEM_CYBERSEC,  user_prompt, max_tokens=420, temperature=0.35),
+        _chat(_SYSTEM_SHORT,     short_prompt, max_tokens=100, temperature=0.2),
+        _chat(_SYSTEM_DEEP_DIVE, user_prompt, max_tokens=600, temperature=0.35),
     )
 
     # Обрезка по лимитам на случай если модель всё же превысила
-    # Не режем жестко ai_text на 950 символов, чтобы не ломать HTML-теги. Позволяем умеренные превышения.
+    # Не режем жестко ai_text/ai_text_deep на 950 символов, чтобы не ломать HTML-теги. Позволяем умеренные превышения.
     if ai_text and len(ai_text) > 4000:
         ai_text = ai_text[:3997] + "..."
     if ai_short and len(ai_short) > 250:
         ai_short = ai_short[:247] + "..."
+    if ai_text_deep and len(ai_text_deep) > 4000:
+        ai_text_deep = ai_text_deep[:3997] + "..."
 
     if ai_text:
         log.info("✅ ai_text сгенерирован ({} симв.)", len(ai_text))
     if ai_short:
         log.info("✅ ai_short сгенерирован ({} симв.)", len(ai_short))
+    if ai_text_deep:
+        log.info("✅ ai_text_deep сгенерирован ({} симв.)", len(ai_text_deep))
 
-    return ai_text, ai_short
+    return ai_text, ai_short, ai_text_deep
+
+
+async def generate_deep_dive_only(
+    title: str,
+    raw_text: str,
+    url: str,
+    source: str,
+) -> Optional[str]:
+    """
+    Генерирует ТОЛЬКО Deep Dive формат для статьи (для ленивой генерации старых новостей).
+    """
+    user_prompt = (
+        f"Источник: {source}\n"
+        f"Заголовок: {title}\n"
+        f"Текст: {raw_text}\n"
+        f"URL: {url}\n\n"
+        f"Напиши технический глубокий разбор (Deep Dive) для Telegram-канала."
+    )
+
+    log.info("🤖 Ленивая генерация Deep Dive для: {}", title[:70])
+    ai_text_deep = await _chat(_SYSTEM_DEEP_DIVE, user_prompt, max_tokens=600, temperature=0.35)
+
+    if ai_text_deep and len(ai_text_deep) > 4000:
+        ai_text_deep = ai_text_deep[:3997] + "..."
+
+    return ai_text_deep
 
 
 async def generate_weekly_digest(news_rows: list) -> Optional[str]:
