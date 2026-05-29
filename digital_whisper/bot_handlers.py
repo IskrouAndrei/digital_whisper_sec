@@ -39,7 +39,6 @@ from logger import log
 from publishers.tg_publisher import publish_to_telegram
 from publishers.vk_publisher import publish_to_vk
 from publishers.x_publisher import publish_to_x
-from publishers.linkedin_pub import publish_to_linkedin
 from publishers.threads_pub import publish_to_threads
 
 # ---------------------------------------------------------------------------
@@ -112,12 +111,12 @@ def get_dispatcher(db: Database) -> Dispatcher:
 def _moderation_keyboard(
     news_id: int,
     tg_done: bool = False,
-    linkedin_done: bool = False,
+    x_done: bool = False,
     selected_format: str = "standard",
 ) -> InlineKeyboardMarkup:
     """Генерирует Inline-клавиатуру для черновика новости."""
     tg_label = "📢 Telegram ✅" if tg_done else "📢 Telegram"
-    linkedin_label = "🔗 LinkedIn ✅" if linkedin_done else "🔗 LinkedIn"
+    x_label = "🐦 X.com ✅" if x_done else "🐦 X.com"
     
     # Кнопка переключения формата
     if selected_format == "deep":
@@ -131,8 +130,8 @@ def _moderation_keyboard(
             InlineKeyboardButton(text="❌ Отклонить",          callback_data=f"reject_{news_id}"),
         ],
         [
-            InlineKeyboardButton(text=tg_label,       callback_data=f"tgonly_{news_id}"),
-            InlineKeyboardButton(text=linkedin_label, callback_data=f"linkedin_{news_id}"),
+            InlineKeyboardButton(text=tg_label, callback_data=f"tgonly_{news_id}"),
+            InlineKeyboardButton(text=x_label,  callback_data=f"x_{news_id}"),
         ],
         [
             format_btn
@@ -289,17 +288,16 @@ async def handle_approve(callback: CallbackQuery, db: Database) -> None:
         await callback.answer("⚠️ Ошибка публикации в Telegram. См. логи", show_alert=True)
         return
 
-    # --- Публикация на другие платформы (VK, X, LinkedIn, Threads) ---
+    # --- Публикация на другие платформы (VK, X, Threads) ---
     import asyncio
     results = await asyncio.gather(
         publish_to_vk(row),
         publish_to_x(row),
-        publish_to_linkedin(row),
         publish_to_threads(row),
         return_exceptions=True
     )
 
-    platforms = ["VK", "X (Twitter)", "LinkedIn", "Threads"]
+    platforms = ["VK", "X (Twitter)", "Threads"]
     success_platforms = ["Telegram"]
     failed_platforms = []
 
@@ -391,7 +389,7 @@ async def handle_telegram_only(callback: CallbackQuery, db: Database) -> None:
         new_keyboard = _moderation_keyboard(
             news_id,
             tg_done=True,
-            linkedin_done=False,
+            x_done=False,
             selected_format=selected_fmt,
         )
         try:
@@ -405,9 +403,9 @@ async def handle_telegram_only(callback: CallbackQuery, db: Database) -> None:
             show_alert=True,
         )
 
-@_router.callback_query(F.data.startswith("linkedin_"))
-async def handle_linkedin_only(callback: CallbackQuery, db: Database) -> None:
-    """Публикует новость ТОЛЬКО в LinkedIn (без смены общего статуса)."""
+@_router.callback_query(F.data.startswith("x_"))
+async def handle_x_only(callback: CallbackQuery, db: Database) -> None:
+    """Публикует новость ТОЛЬКО в X.com (без смены общего статуса)."""
     news_id = int(callback.data.split("_")[1])
     row = db.get_by_id(news_id)
 
@@ -415,10 +413,10 @@ async def handle_linkedin_only(callback: CallbackQuery, db: Database) -> None:
         await callback.answer("❌ Новость не найдена в БД", show_alert=True)
         return
 
-    await callback.answer("🔗 Публикую в LinkedIn...")
-    log.info("👤 Ручная публикация #{} в LinkedIn", news_id)
+    await callback.answer("🐦 Публикую в X.com...")
+    log.info("👤 Ручная публикация #{} в X.com", news_id)
 
-    ok = await publish_to_linkedin(row)
+    ok = await publish_to_x(row)
 
     if ok:
         updated_row = db.get_by_id(news_id)
@@ -427,17 +425,17 @@ async def handle_linkedin_only(callback: CallbackQuery, db: Database) -> None:
         new_keyboard = _moderation_keyboard(
             news_id, 
             tg_done=False, 
-            linkedin_done=True,
+            x_done=True,
             selected_format=selected_fmt
         )
         try:
             await callback.message.edit_reply_markup(reply_markup=new_keyboard)
         except TelegramAPIError:
             pass
-        await callback.answer("✅ Опубликовано в LinkedIn!", show_alert=True)
+        await callback.answer("✅ Опубликовано в X.com!", show_alert=True)
     else:
         await callback.answer(
-            "❌ Ошибка публикации в LinkedIn. Проверь логи.",
+            "❌ Ошибка публикации в X.com. Проверь логи.",
             show_alert=True,
         )
 
@@ -482,7 +480,7 @@ async def handle_change_format(callback: CallbackQuery, db: Database) -> None:
     keyboard = _moderation_keyboard(
         news_id,
         tg_done=False,
-        linkedin_done=False,
+        x_done=False,
         selected_format=fmt,
     )
 

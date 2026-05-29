@@ -180,13 +180,8 @@ async def token_expiry_check_job(db: Database, bot) -> None:
     Ежедневная проверка срока жизни токенов OAuth (LinkedIn и др.).
     LinkedIn токены живут 60 дней. Отправляет напоминание за 2 дня до истечения.
     """
-    from datetime import datetime, timezone, timedelta
-    from aiogram.enums import ParseMode
+    return
 
-    # Токен LinkedIn настроен?
-    access_token = (cfg.linkedin_access_token or "").split("#")[0].strip()
-    if not access_token or access_token.startswith("your_"):
-        return  # LinkedIn не настроен — проверять нечего
 
     today = datetime.now(timezone.utc).date()
 
