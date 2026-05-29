@@ -27,6 +27,9 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove,
 )
 from aiogram.exceptions import TelegramAPIError
 
@@ -38,6 +41,32 @@ from publishers.vk_publisher import publish_to_vk
 from publishers.x_publisher import publish_to_x
 from publishers.linkedin_pub import publish_to_linkedin
 from publishers.threads_pub import publish_to_threads
+
+# ---------------------------------------------------------------------------
+# Клавиатура администратора
+# ---------------------------------------------------------------------------
+
+def _admin_keyboard() -> ReplyKeyboardMarkup:
+    """Постоянная Reply-клавиатура с кнопками управления ботом."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="🔍 Найти новости"),
+                KeyboardButton(text="⏳ Черновики"),
+            ],
+            [
+                KeyboardButton(text="📝 Дайджест Хабр"),
+                KeyboardButton(text="📊 Статус"),
+            ],
+            [
+                KeyboardButton(text="🟢 Авто ВКЛ"),
+                KeyboardButton(text="🛑 Авто ВЫКЛ"),
+            ],
+        ],
+        resize_keyboard=True,
+        persistent=True,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Инициализация бота (синглтон)
@@ -414,6 +443,45 @@ async def cmd_parse(message: Message, db: Database) -> None:
         await message.answer("⚠️ Callback парсера не зарегистрирован. Бот еще запускается.", parse_mode=ParseMode.HTML)
 
 
+# --- Обработчики кнопок Reply Keyboard ---
+
+@_router.message(F.text == "🔍 Найти новости")
+async def btn_parse(message: Message, db: Database) -> None:
+    """Кнопка: Найти новости."""
+    await cmd_parse(message, db)
+
+
+@_router.message(F.text == "⏳ Черновики")
+async def btn_pending(message: Message, db: Database) -> None:
+    """Кнопка: Черновики."""
+    await cmd_pending(message, db)
+
+
+@_router.message(F.text == "📝 Дайджест Хабр")
+async def btn_digest(message: Message, db: Database) -> None:
+    """Кнопка: Дайджест Хабр."""
+    await cmd_digest(message, db)
+
+
+@_router.message(F.text == "📊 Статус")
+async def btn_status(message: Message, db: Database) -> None:
+    """Кнопка: Статус."""
+    await cmd_status(message, db)
+
+
+@_router.message(F.text == "🟢 Авто ВКЛ")
+async def btn_start_auto(message: Message, db: Database) -> None:
+    """Кнопка: Включить автопарсинг."""
+    await cmd_start_auto(message, db)
+
+
+@_router.message(F.text == "🛑 Авто ВЫКЛ")
+async def btn_stop_auto(message: Message, db: Database) -> None:
+    """Кнопка: Выключить автопарсинг."""
+    await cmd_stop_auto(message, db)
+
+
+
 @_router.message(Command("pending"))
 async def cmd_pending(message: Message, db: Database) -> None:
     """Показывает черновики, ожидающие модерации."""
@@ -555,19 +623,29 @@ async def cmd_start(message: Message) -> None:
         "🛡️ <b>CyberSentry: The Digital Whisper</b>\n\n"
         "Панель администратора активна.\n\n"
         "<b>Доступные команды:</b>\n"
-        "• /parse — Запустить ручной поиск киберугроз прямо сейчас\n"
-        "• /pending — Показать черновики, ожидающие модерации\n"
-        "• /digest — Сгенерировать еженедельный дайджест для Хабра прямо сейчас\n"
-        "• /stop_auto — Отключить автоматический поиск раз в час\n"
-        "• /start_auto — Включить автоматический поиск раз в час\n"
-        "• /status — Показать текущий статус и статистику системы\n\n"
-        "<b>Кнопки на каждом черновике:</b>\n"
-        "• ✅ Опубликовать везде — во все платформы сразу\n"
-        "• 📢 Telegram — только в Telegram-канал\n"
-        "• 🔗 LinkedIn — только в LinkedIn\n"
-        "• ❌ Отклонить — убрать из очереди",
+        "• /parse — Запустить ручной поиск прямо сейчас\n"
+        "• /pending — Черновики, ожидающие модерации\n"
+        "• /digest — Еженедельный дайджест для Хабра\n"
+        "• /stop_auto — Отключить автоматический поиск\n"
+        "• /start_auto — Включить автоматический поиск\n"
+        "• /status — Текущий статус и статистика\n\n"
+        "<b>Или используй кнопки ниже 👇</b>",
         parse_mode=ParseMode.HTML,
+        reply_markup=_admin_keyboard(),
     )
+
+
+@_router.message(Command("menu"))
+async def cmd_menu(message: Message) -> None:
+    """Показывает клавиатуру меню."""
+    if str(message.chat.id) != str(cfg.admin_chat_id) and str(message.from_user.id) != str(cfg.admin_chat_id):
+        return
+    await message.answer(
+        "👇 <b>Панель управления:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=_admin_keyboard(),
+    )
+
 
 
 @_router.message(Command("whoami"))
