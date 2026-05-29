@@ -112,14 +112,16 @@ async def process_new_articles(db: Database, new_ids: list[int]) -> None:
 async def _process_pending_queue(db: Database) -> None:
     """
     Запускается при старте в фоне — обрабатывает pending-статьи без ai_text.
+    Обрабатывает не более 5 статей за раз, чтобы не спамить.
     Не блокирует polling бота.
     """
     await asyncio.sleep(3)  # Даём polling подняться
-    pending_ids = db.get_pending_ids()
+    pending_ids = db.get_pending_ids(limit=5)
     if not pending_ids:
         log.info("✅ Очередь pending пустая, LLM не нужен")
         return
-    log.info("📋 Запуск LLM-обработки {} pending-статей в фоне...", len(pending_ids))
+    total_pending = db.get_pending_ids(limit=10000)  # Узнаём реальный размер очереди
+    log.info("📋 Запуск LLM-обработки {}/{} pending-статей в фоне...", len(pending_ids), len(total_pending))
     await process_new_articles(db, pending_ids)
 
 

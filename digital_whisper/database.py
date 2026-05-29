@@ -196,16 +196,21 @@ class Database:
                 """
             ).fetchall()
 
-    def get_pending_ids(self) -> list:
-        """Возвращает ID статей без ai_text (ждут LLM-обработки)."""
+    def get_pending_ids(self, limit: int = 5) -> list:
+        """Возвращает ID статей без ai_text (ждут LLM-обработки).
+        
+        Параметр limit ограничивает количество статей за один цикл,
+        чтобы избежать спама при накоплении большой очереди.
+        """
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT id FROM news
                 WHERE status = 'pending' AND (ai_text IS NULL OR ai_text = '')
                 ORDER BY created_at ASC
-                LIMIT 50
-                """
+                LIMIT ?
+                """,
+                (limit,),
             ).fetchall()
             return [r["id"] for r in rows]
 
