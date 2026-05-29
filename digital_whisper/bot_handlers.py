@@ -455,9 +455,10 @@ async def handle_change_format(callback: CallbackQuery, db: Database) -> None:
 
     row_dict = dict(row)
 
-    # Если выбран Deep Dive, но он пустой (для старых записей), лениво генерируем его
-    if fmt == "deep" and not row_dict.get("ai_text_deep"):
-        await callback.answer("🤖 Генерирую Глубокий разбор... Пожалуйста, подождите...")
+    # При переключении на Deep Dive — ВСЕГДА перегенерируем через LLM (не берём из кеша)
+    # Это гарантирует, что используется актуальный промпт, а не старый закешированный текст
+    if fmt == "deep":
+        await callback.answer("🤖 Генерирую Глубокий разбор... (~10 сек)")
         from llm_service import generate_deep_dive_only
         ai_text_deep = await generate_deep_dive_only(
             title=row_dict["title"],
@@ -467,7 +468,7 @@ async def handle_change_format(callback: CallbackQuery, db: Database) -> None:
         )
         if ai_text_deep:
             db.update_ai_deep_content(news_id, ai_text_deep)
-            row = db.get_by_id(news_id)  # Перечитываем запись
+            row = db.get_by_id(news_id)
             row_dict = dict(row)
         else:
             await callback.answer("❌ Не удалось сгенерировать Deep Dive через LLM", show_alert=True)
