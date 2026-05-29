@@ -46,6 +46,36 @@ RSS_SOURCES: dict[str, str] = {
 }
 
 
+def normalize_url(url: str) -> str:
+    """Нормализует URL для точного сравнения дубликатов."""
+    url = url.strip()
+    
+    # 1. Парсим URL и убираем query-параметры (utm_source, etc.) и хэши
+    from urllib.parse import urlparse, urlunparse
+    try:
+        parsed = urlparse(url)
+        clean_parsed = parsed._replace(query="", fragment="")
+        url = urlunparse(clean_parsed)
+    except Exception:
+        pass
+    
+    # Убираем слеш на конце для единообразия
+    url = url.rstrip("/")
+    
+    # 2. Специальная нормализация для Хабра
+    # Шаблоны: 
+    # https://habr.com/ru/companies/xxx/articles/12345
+    # https://habr.com/ru/articles/12345
+    # https://habr.com/ru/post/12345
+    import re
+    habr_match = re.search(r"habr\.com/(?:ru|en)/(?:companies/[^/]+/)?(?:articles|post)/(\d+)", url)
+    if habr_match:
+        article_id = habr_match.group(1)
+        url = f"https://habr.com/ru/articles/{article_id}"
+        
+    return url
+
+
 def _clean_html(text: str) -> str:
     """Убираем HTML-теги и декодируем HTML-сущности из summary."""
     import re
@@ -105,18 +135,27 @@ async def parse_and_store(db: Database) -> list[int]:
             if not entry_url:
                 continue
 
-            # Дедупликация
-            if db.url_exists(entry_url):
+            # Нормализация URL
+            normalized_url = normalize_url(entry_url)
+
+            # Дедупликация по URL
+            if db.url_exists(normalized_url):
                 continue
 
             title = entry.get("title", "Без заголовка").strip()
+
+            # Дедупликация по заголовку за последние 7 дней
+            if db.title_exists_recently(title, days=7):
+                log.debug("⏭️  Дубликат по заголовку, пропуск: {}", title[:80])
+                continue
+
             summary = _clean_html(entry.get("summary", entry.get("description", "")))
             published_at = entry.get("published", entry.get("pubDate", entry.get("created", ""))).strip()
 
             news_id = db.insert_news(
                 title=title,
                 raw_text=summary,
-                url=entry_url,
+                url=normalized_url,
                 source=source_name,
                 published_at=published_at,
             )
@@ -132,3 +171,4 @@ async def parse_and_store(db: Database) -> list[int]:
 
     log.info("📊 Парсинг завершён. Всего новых статей: {}", len(new_ids))
     return new_ids
+

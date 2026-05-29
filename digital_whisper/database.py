@@ -117,6 +117,26 @@ class Database:
             ).fetchone()
             return row is not None
 
+    def title_exists_recently(self, title: str, days: int = 7) -> bool:
+        """Проверяет, существует ли уже статья с таким же (или очень похожим) заголовком за последние N дней."""
+        normalized = " ".join(title.lower().split()).strip()
+        if not normalized:
+            return False
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT title FROM news
+                WHERE created_at >= datetime('now', ? || ' days')
+                """,
+                (f"-{days}",),
+            ).fetchall()
+            for r in rows:
+                db_title_norm = " ".join(r["title"].lower().split()).strip()
+                if db_title_norm == normalized:
+                    return True
+            return False
+
+
     def insert_news(
         self,
         title: str,
