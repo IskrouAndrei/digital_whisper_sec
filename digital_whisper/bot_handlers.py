@@ -506,6 +506,25 @@ async def cmd_stop_auto(message: Message, db: Database) -> None:
     await message.answer("🛑 <b>Автоматический поиск уязвимостей ВЫКЛЮЧЕН.</b>\nАвто-опрос приостановлен. Вы можете запускать поиск вручную командой /parse.", parse_mode=ParseMode.HTML)
 
 
+@_router.message(Command("digest"))
+async def cmd_digest(message: Message, db: Database) -> None:
+    """Запускает ручную генерацию еженедельного дайджеста для Хабра."""
+    if str(message.chat.id) != str(cfg.admin_chat_id) and str(message.from_user.id) != str(cfg.admin_chat_id):
+        return
+
+    await message.answer("⏳ <b>Запускаю генерацию еженедельного дайджеста для Хабра...</b>\nЭто займет около 10-20 секунд.", parse_mode=ParseMode.HTML)
+
+    try:
+        from publishers.habr_generator import generate_and_send_weekly_digest
+        bot = get_bot()
+        success = await generate_and_send_weekly_digest(db, bot)
+        if not success:
+            await message.answer("❌ <b>Не удалось сгенерировать дайджест.</b> Подробности смотрите в логах.", parse_mode=ParseMode.HTML)
+    except Exception as exc:
+        log.exception("❌ Исключение при ручном запуске дайджеста: {}", exc)
+        await message.answer(f"❌ <b>Исключение при генерации:</b> <code>{exc}</code>", parse_mode=ParseMode.HTML)
+
+
 @_router.message(Command("status"))
 async def cmd_status(message: Message, db: Database) -> None:
     """Команда /status — показывает сводку по БД."""
@@ -538,6 +557,7 @@ async def cmd_start(message: Message) -> None:
         "<b>Доступные команды:</b>\n"
         "• /parse — Запустить ручной поиск киберугроз прямо сейчас\n"
         "• /pending — Показать черновики, ожидающие модерации\n"
+        "• /digest — Сгенерировать еженедельный дайджест для Хабра прямо сейчас\n"
         "• /stop_auto — Отключить автоматический поиск раз в час\n"
         "• /start_auto — Включить автоматический поиск раз в час\n"
         "• /status — Показать текущий статус и статистику системы\n\n"
