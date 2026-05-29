@@ -223,13 +223,13 @@ class Database:
             ).fetchall()
 
     def get_pending_with_ai(self) -> list[sqlite3.Row]:
-        """Возвращает записи, готовые к модерации (есть ai_text, статус pending)."""
+        """Возвращает записи, готовые к модерации (есть ai_text, статус pending), от новых к старым."""
         with self._connect() as conn:
             return conn.execute(
                 """
                 SELECT * FROM news
                 WHERE status = 'pending' AND ai_text IS NOT NULL
-                ORDER BY created_at ASC
+                ORDER BY created_at DESC
                 """
             ).fetchall()
 
